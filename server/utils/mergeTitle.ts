@@ -1,4 +1,4 @@
-// Builds the proposed Square title: "Title (Special Edition) (Paperback) by Author Name".
+// Builds the proposed Square title: "Title (Special Edition) by Author Name (Paperback)".
 // Pure functions with no Nuxt imports so they can be tested on their own.
 
 const SMALL_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'of', 'in', 'on', 'at', 'to', 'by'])
@@ -137,6 +137,6 @@ export function mergeTitle(input: MergeTitleInput): MergedTitle {
   else notes.push('ISBNdb has no binding for this book, so no format was added.')
 
   const base = titleCase(removeEditions(rawBase))
-  const title = [base, edition ? `(${edition})` : null, format ? `(${format})` : null, author ? `by ${author}` : null].filter(Boolean).join(' ')
+  const title = [base, edition ? `(${edition})` : null, author ? `by ${author}` : null, format ? `(${format})` : null].filter(Boolean).join(' ')
   return { title, base, edition, format, authors: author, notes }
 }

@@ -8,6 +8,8 @@ export interface IsbndbRecord {
   status: 'found' | 'no_match'
   fetchedAt: string
   book?: any
+  // Whether the original cover was saved locally from the ISBNdb link.
+  cover?: 'saved' | 'none' | 'failed'
 }
 export type IsbndbStore = Record<string, IsbndbRecord>
 

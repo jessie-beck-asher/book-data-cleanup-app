@@ -24,5 +24,8 @@ export function imageNameFor(title: string, sprayedEdges: boolean) {
   return `${base}-book-cover${sprayedEdges ? '-sprayed-edges' : ''}`
 }
 
+// The caption (Square shows it as the image's alt text) is the image name with spaces instead of dashes.
+export const imageCaptionFor = (name: string) => name.replace(/-/g, ' ')
+
 // A Square image already named with "sprayed-edges" starts out marked.
 export const looksSprayed = (name: string | undefined) => /sprayed/i.test(name ?? '')

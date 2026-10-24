@@ -1,5 +1,6 @@
 // Updates ONE item in Square (sandbox only for now): uploads new images, upserts the item, then deletes removed images.
 import { readFile } from 'node:fs/promises'
+import { imageCaptionFor } from '../../../../shared/imageNames.ts'
 
 let sending = false
 
@@ -17,7 +18,7 @@ export default defineEventHandler(async (event) => {
     const plan = await makePlan(id)
     if (plan.blockers.length || !plan.internal) throw createError({ statusCode: 409, statusMessage: 'This update is blocked', data: { blockers: plan.blockers } })
     if (!plan.rows.some(row => row.changed)) throw createError({ statusCode: 409, statusMessage: 'Nothing would change' })
-    const { item, original, uploads, deleteImageIds, renames, caption } = plan.internal
+    const { item, original, uploads, deleteImageIds, renames } = plan.internal
 
     // 0. Keep Square's current copy of the item, so this update can be reverted. If this fails, nothing is sent.
     await saveBackup(id, original, 'before-update')
@@ -29,7 +30,7 @@ export default defineEventHandler(async (event) => {
       const form = new FormData()
       form.append('request', new Blob([JSON.stringify({
         idempotency_key: crypto.randomUUID(),
-        image: { type: 'IMAGE', id: '#image', image_data: { caption, name: upload.name } }
+        image: { type: 'IMAGE', id: '#image', image_data: { caption: imageCaptionFor(upload.name), name: upload.name } }
       })], { type: 'application/json' }))
       form.append('file', new Blob([await readFile(optimizedPath(upload.isbn, upload.key))], { type: 'image/jpeg' }), `${upload.name}.jpg`)
       const result = await squareWriteForm('/v2/catalog/images', form)
@@ -48,7 +49,7 @@ export default defineEventHandler(async (event) => {
       try {
         const current = await squareGet(`/v2/catalog/object/${rename.imageId}`)
         const object = current.object
-        object.image_data = { ...object.image_data, name: rename.name }
+        object.image_data = { ...object.image_data, name: rename.name, caption: imageCaptionFor(rename.name) }
         await squareWriteJson('/v2/catalog/object', { idempotency_key: crypto.randomUUID(), object })
         done.push(`Renamed image to ${rename.name}`)
       } catch (error: any) {

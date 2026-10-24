@@ -55,7 +55,7 @@ Intended flow:
 | 1 | Tech stack | **Decided: Nuxt.** Nitro server routes keep Square/ISBNdb calls and keys server-side. **TypeScript: yes.** Version: latest stable release; the exact version is confirmed against the official source at setup time and pinned (not assumed), and runs on the current Node LTS |
 | 2 | Square environment | **Decided: driven by env variables;** owner switches environments. See safety note below |
 | 3 | Which Square field holds the ISBN | **Decided: GTIN usually, SKU sometimes** (often when an unusual variant is attached). Still open: see "ISBN extraction" below |
-| 4 | Which fields are shown, and which may be updated | **Decided for Square: title, description, shipping weight, categories** (editable/updatable). **Excluded for good: price, custom attributes.** **Image: now in scope (see "Images").** ISBNdb: what to store in the JSON and what to show/use is decided later, as we go |
+| 4 | Which fields are shown, and which may be updated | **Decided for Square: title, description, categories** (editable/updatable). **Shipping weight is NOT updatable via API (Square's Catalog API doesn't expose it, per forum/staff posts, still to confirm on a real item). Instead it is shown on the interface as read-only ISBNdb reference data, converted to pounds, for the owner to copy and paste into Square by hand.** **Excluded for good: price, custom attributes.** **Image: now in scope (see "Images").** ISBNdb: what to store in the JSON and what to show/use is decided later, as we go |
 | 5 | Handling items with no ISBN or no ISBNdb match | **Decided for no-ISBN items: ignore** (scope is books only). **Decided for ISBN with no ISBNdb match:** stays on the dashboard, labeled "No match"; untouched in Square unless edited by hand and approved |
 | 6 | ISBNdb plan and rate limits | **Decided: Basic plan**, starting with the 7-day free trial. Limits: 5,000 searches/day, 1 request/second, $14.99/month after trial. Design implications below |
 | 7 | Progress tracking and storage | **Decided: three local JSON files** (see "Local data files" below). Still open: file location/names and whether they are git-ignored |
@@ -73,7 +73,7 @@ Intended flow:
 ## Updatable fields: things to verify in Phase 1 (read-only)
 
 - Title and description live on the item; check whether description is stored as plain text, HTML, or both so we write the right one.
-- Shipping weight and categories may live on different Square objects (item vs. variation, or separate category objects). Inspect real data to confirm where each lives before designing the update call.
+- Categories may live on a different Square object (separate category objects). Inspect real data to confirm before designing the update call. Shipping weight is not read from or written to Square; it comes from ISBNdb (if present) and is displayed in pounds only.
 - The write path is a strict allowlist of these four fields; anything else (including price and custom attributes) is carried over unchanged.
 
 ## Local data files (owner-decided design; details proposed)
@@ -110,7 +110,7 @@ Proposed design (pending approval):
 - Proposed compression (pending approval): lossless only (maximum PNG compression, metadata stripped), so image quality is never degraded. Lossy PNG palette reduction would be smaller but can band on cover art; the owner may opt in.
 - The image URL arrives as part of the ISBNdb batch response, so there is no separate ISBNdb API call to get it.
 - ISBNdb image URLs **expire after about 2 hours**. So the app downloads and saves the image files to the local images folder **immediately after each ISBNdb batch response**, and the JSON records the local file path alongside the (expiring) URL. After that, nothing depends on the URL. Which image version(s) to save depends on what the response actually contains (to confirm in Phase 2). Download failures are recorded per book and retried right away; if the URL has already expired, a fresh URL requires re-fetching that ISBN from ISBNdb (which costs quota). To verify: whether fetching the image URL has its own limits.
-- Images change the item's image reference in Square, so image becomes one more allowlisted field in the single-item update, alongside title, description, shipping weight, and categories.
+- Images change the item's image reference in Square, so image becomes one more allowlisted field in the single-item update, alongside title, description, and categories (not weight; see row 4).
 
 Decided: image set is managed by the owner on the detail page.
 - The detail page shows **all** images: the item's current Square images and the ISBNdb candidate.

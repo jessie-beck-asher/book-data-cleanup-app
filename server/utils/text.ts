@@ -25,3 +25,13 @@ export function tidyText(text: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
+
+// For descriptions going to Square: drops quote marks (and a trailing "--") at the very start and end, and turns "--" into "-".
+export function cleanDescription(text: string): string {
+  return tidyText(text)
+    .replace(/^["“”]+\s*/, '')
+    .replace(/\s*["“”]+[-–—]*\s*$/, '')
+    .replace(/\s*-{2,}\s*$/, '')
+    .replace(/-{2,}/g, '-')
+    .trim()
+}

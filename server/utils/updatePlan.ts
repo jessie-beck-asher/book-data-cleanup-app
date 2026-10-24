@@ -105,7 +105,7 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
 
   // ---- Description
   const currentText = tidyText(data.description_plaintext ?? data.description ?? '')
-  const newText = tidyText(edit.description)
+  const newText = cleanDescription(edit.description)
   plan.rows.push({ field: 'Description', before: currentText || '(none)', after: newText || '(none)', changed: currentText !== newText })
   if (currentText !== newText) {
     data.description_html = plainToHtml(newText)

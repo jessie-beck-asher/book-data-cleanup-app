@@ -1,5 +1,5 @@
 // Builds the proposed Square description. Pure functions with no Nuxt imports so they can be tested on their own.
-import { tidyText } from './text.ts'
+import { cleanDescription, tidyText } from './text.ts'
 
 // Share of the Square text's 4-word runs that must also appear in the ISBNdb text to call it the same book.
 const MATCH_THRESHOLD = 0.3
@@ -48,7 +48,7 @@ export function overlapWithSquare(squareText: string, isbndbText: string): numbe
   return shared / squareShingles.size
 }
 
-export function mergeDescription(input: { squareDescription: string, isbndbDescription: string | null }): MergedDescription {
+function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescription: string | null }): MergedDescription {
   const notes: string[] = []
   const square = stripPublisherTag(input.squareDescription ?? '')
   const isbndbText = input.isbndbDescription ? tidyText(input.isbndbDescription) : ''
@@ -84,4 +84,10 @@ export function mergeDescription(input: { squareDescription: string, isbndbDescr
 
   check = 'mismatch'
   return squareFallback(`The ISBNdb description shares only ${Math.round(overlap * 100)}% of its wording with the Square description, so it may be for a different book. Using the Square description instead.`)
+}
+
+// The proposal never starts or ends with quote marks and has no "--" (see cleanDescription).
+export function mergeDescription(input: { squareDescription: string, isbndbDescription: string | null }): MergedDescription {
+  const merged = mergeDescriptionRaw(input)
+  return { ...merged, description: cleanDescription(merged.description) }
 }

@@ -1,5 +1,7 @@
 // Proposes the single variation of a book as "Regular". Pure functions with no Nuxt imports so they can be tested on their own.
 
+import { toIsbn13 } from './isbn.ts'
+
 export const REGULAR_VARIATION = 'Regular'
 
 export interface MergedVariation {
@@ -39,11 +41,13 @@ export function mergeVariation(itemData: any): MergedVariation {
   const optionCount: number = (data.item_option_values ?? []).length
   const needsChange = currentName !== REGULAR_VARIATION || optionCount > 0
 
+  // The ISBN moves from the SKU to the GTIN when the variation is changed, if the GTIN is empty.
+  const movesSkuToGtin = needsChange && !!toIsbn13(data.sku) && !String(data.upc ?? '').trim()
   const price = formatMoney(data.price_money)
   const preserved = [
     `Same variation (ID ${variations[0].id}), so on-hand counts stay with it`,
-    `SKU: ${data.sku || '(none)'}`,
-    `GTIN: ${data.upc || '(none)'}`,
+    movesSkuToGtin ? `SKU: ${data.sku} (moves to the GTIN field; the SKU is cleared)` : `SKU: ${data.sku || '(none)'}`,
+    movesSkuToGtin ? `GTIN: ${toIsbn13(data.sku)} (from the SKU)` : `GTIN: ${data.upc || '(none)'}`,
     `Price: ${price ?? '(none)'}, sent back unchanged`,
     `Inventory tracking: ${data.track_inventory ? 'on' : 'off'}`,
     `Unit cost: ${formatMoney(data.default_unit_cost) ?? '(none)'}`,
@@ -57,6 +61,7 @@ export function mergeVariation(itemData: any): MergedVariation {
   if (!needsChange) notes.push('Already "Regular" with no item options. Nothing to change.')
   else {
     notes.push(`The variation is named "${currentName}".`)
+    if (movesSkuToGtin) notes.push('The ISBN is in the SKU, so it would move to the GTIN field and the SKU would be cleared.')
     if (optionCount) notes.push(`It is tied to ${optionCount} item options (like Language and Format). They would be removed from the variation and from the item.`)
   }
   return { handled: true, currentName, proposedName: REGULAR_VARIATION, needsChange, optionCount, preserved, notes }

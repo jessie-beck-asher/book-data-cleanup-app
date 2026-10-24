@@ -47,7 +47,7 @@ export default defineEventHandler(async (event) => {
       environment: snapshot.environment,
       pulledAt: snapshot.pulledAt,
       ...countBooks(snapshot.items),
-      savedTo: SNAPSHOT_DISPLAY_PATH
+      savedTo: snapshotDisplayPath()
     }
   } finally {
     pulling = false

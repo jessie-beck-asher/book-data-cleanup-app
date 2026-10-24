@@ -7,25 +7,6 @@ interface Body { isbn?: string, key?: string, crop?: { zoom?: number, cx?: numbe
 
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-// Square images are saved the first time they are needed, so a copy exists locally before anything is ever deleted in Square.
-async function loadSquareImage(imageId: string): Promise<Buffer> {
-  const file = join(DATA_DIR, 'images', 'square', imageId)
-  try {
-    return await readFile(file)
-  } catch {
-    // Not saved yet; download it below.
-  }
-  const snapshot = await readSnapshot()
-  const url = snapshot?.relatedObjects.find(object => object.id === imageId && object.type === 'IMAGE')?.image_data?.url as string | undefined
-  if (!url?.startsWith('https://')) throw createError({ statusCode: 404, statusMessage: 'That Square image is not in the snapshot' })
-  const response = await fetch(url)
-  if (!response.ok) throw createError({ statusCode: 502, statusMessage: `Could not download the Square image (status ${response.status})` })
-  const buffer = Buffer.from(await response.arrayBuffer())
-  await mkdir(join(DATA_DIR, 'images', 'square'), { recursive: true })
-  await writeFile(file, buffer)
-  return buffer
-}
-
 async function loadSource(isbn: string, key: string): Promise<Buffer> {
   const [kind, rest = ''] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
   try {
@@ -48,10 +29,11 @@ export default defineEventHandler(async (event) => {
 
   const result = await optimizeImage(await loadSource(isbn, key), { zoom: crop.zoom, cx: crop.cx, cy: crop.cy })
 
-  const name = `${key.replace(/[^A-Za-z0-9_-]/g, '-')}.jpg`
-  const dir = join(DATA_DIR, 'images', 'optimized', isbn)
-  await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, name), result.buffer)
+  const name = optimizedName(key)
+  await mkdir(join(DATA_DIR, 'images', 'optimized', isbn), { recursive: true })
+  await writeFile(optimizedPath(isbn, key), result.buffer)
+  // Remembers which crop this file was made from, so the update can tell whether the preview is still current.
+  await writeFile(`${optimizedPath(isbn, key)}.json`, JSON.stringify({ crop: { zoom: crop.zoom, cx: crop.cx, cy: crop.cy }, warnings: result.warnings, width: result.width, bytes: result.bytes }))
   return {
     url: `/api/images/optimized/${isbn}/${name}`,
     width: result.width,

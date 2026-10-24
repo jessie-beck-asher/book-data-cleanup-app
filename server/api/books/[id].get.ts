@@ -101,6 +101,7 @@ export default defineEventHandler(async (event) => {
       })
     },
     imageCandidates,
+    saved: (await readEdits())[item.id] ?? null,
     // The item exactly as Square returned it, plus the category and image objects it points to.
     squareRaw: {
       item,

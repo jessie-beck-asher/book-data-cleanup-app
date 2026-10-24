@@ -2,13 +2,14 @@
 const route = useRoute()
 const { data: book, error, refresh } = await useFetch(`/api/books/${route.params.id}`)
 
-// Edits live only on this page for now; they are not saved anywhere yet.
-const proposedTitle = ref(book.value?.merged.title.title ?? '')
+// Edits are saved to a local file as they are made (see the autosave at the bottom of this script); nothing is sent to Square.
+const saved = book.value?.saved ?? null
+const proposedTitle = ref(saved?.title ?? book.value?.merged.title.title ?? '')
 function resetTitle() {
   proposedTitle.value = book.value?.merged.title.title ?? ''
 }
 
-const proposedDescription = ref(book.value?.merged.description.description ?? '')
+const proposedDescription = ref(saved?.description ?? book.value?.merged.description.description ?? '')
 // Red outline stays until the description is edited: Square's text is cut off and ISBNdb's looks like another book.
 const descriptionNeedsAttention = computed(() => {
   const merged = book.value?.merged.description
@@ -19,7 +20,7 @@ function resetDescription() {
 }
 
 // Clicked pills are the categories that will be included.
-const selectedCategories = ref<string[]>([...(book.value?.merged.categories.selected ?? [])])
+const selectedCategories = ref<string[]>([...(saved?.categories ?? book.value?.merged.categories.selected ?? [])])
 function toggleCategory(name: string) {
   selectedCategories.value = selectedCategories.value.includes(name)
     ? selectedCategories.value.filter(category => category !== name)
@@ -34,11 +35,13 @@ function resetCategories() {
 }
 
 // Variation: on by default when the book's variation is not already a plain "Regular".
-const changeVariation = ref(book.value?.merged.variation.needsChange ?? false)
+const changeVariation = ref(saved?.changeVariation ?? book.value?.merged.variation.needsChange ?? false)
 
 // Images the owner has turned on. The final set is exactly what will be on the item in Square.
 const defaultImageKeys = () => (book.value?.imageCandidates ?? []).filter(image => image.defaultOn).map(image => image.key)
-const includedImages = ref<string[]>(defaultImageKeys())
+// Saved picks are kept only for images that still exist (an upload may have been removed from disk).
+const existingImageKeys = new Set((book.value?.imageCandidates ?? []).map(image => image.key))
+const includedImages = ref<string[]>(saved ? saved.includedImages.filter(key => existingImageKeys.has(key)) : defaultImageKeys())
 function toggleImage(key: string) {
   includedImages.value = includedImages.value.includes(key)
     ? includedImages.value.filter(included => included !== key)
@@ -70,7 +73,7 @@ interface Crop { zoom: number, cx: number, cy: number }
 const FRAME = 360
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 4
-const crops = ref<Record<string, Crop>>({})
+const crops = ref<Record<string, Crop>>({ ...(saved?.crops ?? {}) })
 const editingKey = ref<string | null>(null)
 const cropOf = (key: string): Crop => crops.value[key] ?? { zoom: 1, cx: 0.5, cy: 0.5 }
 const isCropped = (key: string) => {
@@ -165,6 +168,94 @@ async function optimizeIncluded() {
   }
 }
 
+// Copy a description to the clipboard, showing "Copied" on that button for a moment.
+const copied = ref<string | null>(null)
+async function copyText(which: string, text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    copied.value = which
+    setTimeout(() => {
+      if (copied.value === which) copied.value = null
+    }, 1500)
+  } catch {
+    copied.value = null
+  }
+}
+
+function reloadPage() {
+  window.location.reload()
+}
+
+// Autosave: every change is written to a local file shortly after it is made. This never touches Square.
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'failed'>(saved ? 'saved' : 'idle')
+const savedAt = ref<string | null>(saved?.savedAt ?? null)
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+async function saveEdits() {
+  if (!book.value) return
+  saveStatus.value = 'saving'
+  try {
+    const result = await $fetch<{ savedAt: string }>(`/api/books/${book.value.id}/edits`, {
+      method: 'PUT',
+      body: {
+        title: proposedTitle.value,
+        description: proposedDescription.value,
+        categories: selectedCategories.value,
+        changeVariation: changeVariation.value,
+        includedImages: includedImages.value,
+        crops: crops.value
+      }
+    })
+    savedAt.value = result.savedAt
+    saveStatus.value = 'saved'
+  } catch {
+    saveStatus.value = 'failed'
+  }
+}
+watch([proposedTitle, proposedDescription, selectedCategories, changeVariation, includedImages, crops], () => {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveEdits, 600)
+}, { deep: true })
+
+// Review and update. Review only builds the diff; the update button sends this one book to Square (sandbox only for now).
+interface PlanResult { environment: string, canSend: boolean, writesEnabled: boolean, blockers: string[], warnings: string[], rows: { field: string, before: string, after: string, changed: boolean }[] }
+const plan = ref<PlanResult | null>(null)
+const planning = ref(false)
+const sending = ref(false)
+const reviewError = ref('')
+const sendResult = ref<{ steps: string[], problems: string[] } | null>(null)
+async function reviewChanges() {
+  if (!book.value) return
+  reviewError.value = ''
+  sendResult.value = null
+  planning.value = true
+  try {
+    clearTimeout(saveTimer)
+    await saveEdits()
+    plan.value = await $fetch<PlanResult>(`/api/books/${book.value.id}/plan`, { method: 'POST' })
+  } catch (err) {
+    plan.value = null
+    reviewError.value = (err as { statusMessage?: string }).statusMessage || 'Could not build the review'
+  } finally {
+    planning.value = false
+  }
+}
+async function sendUpdate() {
+  if (!book.value || !plan.value) return
+  if (!window.confirm(`Update this ONE book in Square (${plan.value.environment})? Only the changed rows above will be sent.`)) return
+  reviewError.value = ''
+  sending.value = true
+  try {
+    sendResult.value = await $fetch(`/api/books/${book.value.id}/send`, { method: 'POST', body: { confirm: true } })
+    plan.value = null
+  } catch (err) {
+    const error = err as { statusMessage?: string, data?: { data?: { completedSteps?: string[], blockers?: string[] } } }
+    const done = error.data?.data?.completedSteps
+    reviewError.value = `${error.statusMessage || 'Update failed'}${done?.length ? ` (done before it stopped: ${done.join('; ')})` : ''}`
+  } finally {
+    sending.value = false
+  }
+}
+
 // Upload your own image; it is saved locally only.
 const uploadError = ref('')
 const uploading = ref(false)
@@ -209,7 +300,15 @@ function formatBytes(bytes: number) {
       <p v-else-if="book.isbndb.status === 'no_match'" class="note">ISBNdb has no match for this ISBN.</p>
 
       <section class="proposed">
-        <h2>Proposed values for Square <small>Edits are not saved yet, and nothing is sent to Square.</small></h2>
+        <h2>
+          Proposed values for Square
+          <small>
+            Your edits are saved on this computer as you go. Nothing is sent to Square.
+            <span v-if="saveStatus === 'saving'">Saving…</span>
+            <span v-else-if="saveStatus === 'saved' && savedAt" class="saved">Saved {{ new Date(savedAt).toLocaleTimeString() }}</span>
+            <span v-else-if="saveStatus === 'failed'" class="warning">Could not save.</span>
+          </small>
+        </h2>
 
         <div class="proposed-grid">
           <div class="field-label">
@@ -285,7 +384,7 @@ function formatBytes(bytes: number) {
                 :aria-pressed="changeVariation"
                 @click="changeVariation = !changeVariation"
               >
-                {{ changeVariation ? 'Change to Regular' : 'Leave as is' }}
+                Change to Regular
               </button>
             </template>
           </div>
@@ -400,6 +499,46 @@ function formatBytes(bytes: number) {
             </ul>
           </div>
         </div>
+
+        <div class="review">
+          <button type="button" :disabled="planning || sending" @click="reviewChanges">
+            {{ planning ? 'Building review…' : 'Review changes' }}
+          </button>
+          <span class="review-hint">Shows exactly what would change. Nothing is sent until you press the update button.</span>
+          <p v-if="reviewError" class="warning">{{ reviewError }}</p>
+
+          <div v-if="sendResult" class="send-result">
+            <strong>Updated in Square.</strong>
+            <ul>
+              <li v-for="step in sendResult.steps" :key="step">{{ step }}</li>
+              <li v-for="problem in sendResult.problems" :key="problem" class="warning">{{ problem }}</li>
+            </ul>
+            <button type="button" @click="reloadPage">Reload this page</button>
+          </div>
+
+          <div v-if="plan" class="plan">
+            <table class="plan-table">
+              <thead><tr><th>Field</th><th>Now in Square</th><th>After the update</th></tr></thead>
+              <tbody>
+                <tr v-for="row in plan.rows" :key="row.field" :class="{ changed: row.changed }">
+                  <th>{{ row.field }}<span v-if="row.changed" class="tag">changes</span><span v-else class="tag same">unchanged</span></th>
+                  <td class="text">{{ row.before }}</td>
+                  <td class="text">{{ row.after }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <ul v-if="plan.blockers.length" class="blockers">
+              <li v-for="blocker in plan.blockers" :key="blocker" class="warning">Blocked: {{ blocker }}</li>
+            </ul>
+            <ul v-if="plan.warnings.length">
+              <li v-for="warning in plan.warnings" :key="warning" class="incomplete-note">{{ warning }}</li>
+            </ul>
+            <p v-if="!plan.writesEnabled" class="warning">Writing is only enabled in the sandbox. This is production, so the update button is off.</p>
+            <button type="button" class="send" :disabled="!plan.canSend || sending" @click="sendUpdate">
+              {{ sending ? 'Updating…' : `Looks good, update this book in Square (${plan.environment})` }}
+            </button>
+          </div>
+        </div>
       </section>
 
       <table class="compare">
@@ -414,8 +553,16 @@ function formatBytes(bytes: number) {
           </tr>
           <tr>
             <th>Description</th>
-            <td class="text">{{ book.square.description || '(none)' }}</td>
             <td class="text">
+              <button v-if="book.square.description" type="button" class="copy" @click="copyText('square', book.square.description)">
+                {{ copied === 'square' ? 'Copied' : 'Copy' }}
+              </button>
+              <div>{{ book.square.description || '(none)' }}</div>
+            </td>
+            <td class="text">
+              <button v-if="book.isbndb.status === 'found' && book.isbndb.description" type="button" class="copy" @click="copyText('isbndb', book.isbndb.description)">
+                {{ copied === 'isbndb' ? 'Copied' : 'Copy' }}
+              </button>
               <div :class="{ flagged: book.merged.description.isbndbCheck === 'mismatch' }">
                 {{ book.isbndb.status === 'found' ? book.isbndb.description || '(none)' : '—' }}
               </div>
@@ -497,6 +644,20 @@ function formatBytes(bytes: number) {
 .reasons p { margin: 0 0 0.25rem; }
 .reasons ul { margin: 0; padding-left: 1rem; }
 
+.copy { display: block; margin-bottom: 0.35rem; }
+.review { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #ddd; }
+.review-hint { margin-left: 0.75rem; font-size: 0.8rem; color: #555; }
+.plan { margin-top: 0.75rem; }
+.plan-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+.plan-table th, .plan-table td { text-align: left; vertical-align: top; padding: 0.4rem 0.75rem 0.4rem 0; border-top: 1px solid #ddd; }
+.plan-table th { width: 12rem; }
+.plan-table .text { white-space: pre-wrap; word-break: break-word; }
+.plan-table tr.changed { background: #eef6ff; }
+.plan-table .tag.same { background: #eee; color: #555; }
+.send { margin-top: 0.75rem; font-weight: 600; padding: 0.5rem 1rem; }
+.send-result { margin-top: 0.75rem; color: #1f6f43; }
+.blockers { padding-left: 1rem; }
+.proposed h2 .saved { color: #1f6f43; font-weight: 600; margin-left: 0.5rem; }
 .variation p { margin: 0 0 0.35rem; }
 .variation .was { color: #555; }
 .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }

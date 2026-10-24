@@ -1,8 +1,20 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export const SNAPSHOT_FILE = join(DATA_DIR, 'square-snapshot.json')
-export const SNAPSHOT_DISPLAY_PATH = 'data/square-snapshot.json'
+// One snapshot per Square environment, so a sandbox pull can never overwrite the production snapshot.
+export function currentEnvironmentName() {
+  const environment = getSquareEnvironment()
+  if (environment === 'unset' || environment === 'invalid') {
+    throw createError({ statusCode: 400, statusMessage: `SQUARE_ENVIRONMENT is ${environment}` })
+  }
+  return environment
+}
+export function snapshotFile() {
+  return join(DATA_DIR, `square-snapshot.${currentEnvironmentName()}.json`)
+}
+export function snapshotDisplayPath() {
+  return `data/square-snapshot.${currentEnvironmentName()}.json`
+}
 
 export interface SquareSnapshot {
   environment: 'sandbox' | 'production'
@@ -13,7 +25,7 @@ export interface SquareSnapshot {
 
 export async function readSnapshot(): Promise<SquareSnapshot | null> {
   try {
-    return JSON.parse(await readFile(SNAPSHOT_FILE, 'utf8'))
+    return JSON.parse(await readFile(snapshotFile(), 'utf8'))
   } catch (error: any) {
     if (error?.code === 'ENOENT') return null
     throw error
@@ -21,7 +33,7 @@ export async function readSnapshot(): Promise<SquareSnapshot | null> {
 }
 
 export function writeSnapshot(snapshot: SquareSnapshot) {
-  return writeJsonAtomic(SNAPSHOT_FILE, snapshot)
+  return writeJsonAtomic(snapshotFile(), snapshot)
 }
 
 // GTIN (upc) wins; SKU is used only when a variation has no GTIN.

@@ -3,6 +3,7 @@ export default defineEventHandler(async () => {
   const snapshot = await readSnapshot()
   if (!snapshot) return { hasSnapshot: false as const, books: [] }
 
+  const edits = await readEdits()
   const books = snapshot.items
     .filter(item => getItemIsbns(item).size === 1)
     .map(item => ({
@@ -10,7 +11,7 @@ export default defineEventHandler(async () => {
       title: (item.item_data?.name as string | undefined)?.trim() || '(untitled)',
       archived: item.item_data?.is_archived === true,
       // Becomes true only once Square confirms an update; nothing writes to Square yet.
-      wasUpdated: false
+      wasUpdated: edits[item.id]?.wasUpdated === true
     }))
     .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true }))
 

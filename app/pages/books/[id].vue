@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const route = useRoute()
-const { data: book, error } = await useFetch(`/api/books/${route.params.id}`)
+const { data: book, error, refresh } = await useFetch(`/api/books/${route.params.id}`)
 
 // Edits live only on this page for now; they are not saved anywhere yet.
 const proposedTitle = ref(book.value?.merged.title.title ?? '')
@@ -31,6 +31,165 @@ const categoriesChanged = computed(() => {
 })
 function resetCategories() {
   selectedCategories.value = [...(book.value?.merged.categories.selected ?? [])]
+}
+
+// Variation: on by default when the book's variation is not already a plain "Regular".
+const changeVariation = ref(book.value?.merged.variation.needsChange ?? false)
+
+// Images the owner has turned on. The final set is exactly what will be on the item in Square.
+const defaultImageKeys = () => (book.value?.imageCandidates ?? []).filter(image => image.defaultOn).map(image => image.key)
+const includedImages = ref<string[]>(defaultImageKeys())
+function toggleImage(key: string) {
+  includedImages.value = includedImages.value.includes(key)
+    ? includedImages.value.filter(included => included !== key)
+    : [...includedImages.value, key]
+}
+const imagesChanged = computed(() => {
+  const original = defaultImageKeys()
+  return original.length !== includedImages.value.length || original.some(key => !includedImages.value.includes(key))
+})
+function resetImages() {
+  includedImages.value = defaultImageKeys()
+}
+// Pixel size is read from the loaded image itself.
+const imageDims = ref<Record<string, { w: number, h: number }>>({})
+function recordSize(key: string, event: Event) {
+  const img = event.target as HTMLImageElement
+  imageDims.value[key] = { w: img.naturalWidth, h: img.naturalHeight }
+}
+// Images can finish loading before the page is hydrated, which misses their load event; read those sizes directly.
+onMounted(() => {
+  document.querySelectorAll<HTMLImageElement>('.image-card img[data-key]').forEach((img) => {
+    if (img.complete && img.naturalWidth) imageDims.value[img.dataset.key!] = { w: img.naturalWidth, h: img.naturalHeight }
+  })
+})
+
+// Crop: the final picture is a square frame. zoom 1 shows the whole cover inside the frame (white around it);
+// larger zooms crop in. cx/cy are where the middle of the picture sits in the frame (0 to 1, 0.5 is centered).
+interface Crop { zoom: number, cx: number, cy: number }
+const FRAME = 360
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 4
+const crops = ref<Record<string, Crop>>({})
+const editingKey = ref<string | null>(null)
+const cropOf = (key: string): Crop => crops.value[key] ?? { zoom: 1, cx: 0.5, cy: 0.5 }
+const isCropped = (key: string) => {
+  const crop = cropOf(key)
+  return crop.zoom !== 1 || crop.cx !== 0.5 || crop.cy !== 0.5
+}
+const editingImage = computed(() => book.value?.imageCandidates.find(image => image.key === editingKey.value) ?? null)
+
+// Size and position of the picture inside the frame, in frame pixels.
+function placement(key: string, crop: Crop) {
+  const dims = imageDims.value[key]
+  if (!dims) return null
+  const scale = (FRAME / Math.max(dims.w, dims.h)) * crop.zoom
+  const width = dims.w * scale
+  const height = dims.h * scale
+  return { width, height, left: crop.cx * FRAME - width / 2, top: crop.cy * FRAME - height / 2 }
+}
+// The picture may not leave blank space inside the frame once it is larger than the frame, and may not leave the frame when smaller.
+function clampCenter(size: number, center: number) {
+  const low = size > FRAME ? FRAME - size / 2 : size / 2
+  const high = size > FRAME ? size / 2 : FRAME - size / 2
+  return Math.min(Math.max(center * FRAME, low), high) / FRAME
+}
+function setCrop(key: string, next: Crop) {
+  const dims = imageDims.value[key]
+  if (!dims) return
+  const zoom = Math.min(Math.max(next.zoom, MIN_ZOOM), MAX_ZOOM)
+  const fit = FRAME / Math.max(dims.w, dims.h)
+  crops.value[key] = {
+    zoom,
+    cx: clampCenter(dims.w * fit * zoom, next.cx),
+    cy: clampCenter(dims.h * fit * zoom, next.cy)
+  }
+}
+const frameStyle = computed(() => {
+  const key = editingKey.value
+  const place = key ? placement(key, cropOf(key)) : null
+  return place ? { width: `${place.width}px`, height: `${place.height}px`, left: `${place.left}px`, top: `${place.top}px` } : { display: 'none' }
+})
+let dragStart: { x: number, y: number, crop: Crop } | null = null
+function dragBegin(event: PointerEvent) {
+  if (!editingKey.value) return
+  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+  dragStart = { x: event.clientX, y: event.clientY, crop: cropOf(editingKey.value) }
+}
+function dragMove(event: PointerEvent) {
+  if (!dragStart || !editingKey.value) return
+  setCrop(editingKey.value, {
+    ...dragStart.crop,
+    cx: dragStart.crop.cx + (event.clientX - dragStart.x) / FRAME,
+    cy: dragStart.crop.cy + (event.clientY - dragStart.y) / FRAME
+  })
+}
+function dragEnd() {
+  dragStart = null
+}
+function zoomTo(zoom: number) {
+  if (editingKey.value) setCrop(editingKey.value, { ...cropOf(editingKey.value), zoom })
+}
+function wheelZoom(event: WheelEvent) {
+  if (editingKey.value) zoomTo(cropOf(editingKey.value).zoom * (event.deltaY < 0 ? 1.08 : 1 / 1.08))
+}
+function fitWholeCover() {
+  if (editingKey.value) delete crops.value[editingKey.value]
+}
+
+// Optimize: builds the JPEG that would be sent to Square, so it can be checked first. Nothing is sent.
+interface Optimized { url: string, width: number, height: number, bytes: number, quality: number, warnings: string[], cropJson: string, madeAt: number }
+const optimized = ref<Record<string, Optimized>>({})
+const optimizing = ref(false)
+const optimizeError = ref('')
+const includedCandidates = computed(() => (book.value?.imageCandidates ?? []).filter(image => includedImages.value.includes(image.key)))
+const isStale = (key: string) => optimized.value[key]?.cropJson !== JSON.stringify(cropOf(key))
+const allOptimized = computed(() => includedCandidates.value.length > 0 && includedCandidates.value.every(image => optimized.value[image.key] && !isStale(image.key)))
+async function optimizeIncluded() {
+  if (!book.value) return
+  optimizeError.value = ''
+  optimizing.value = true
+  try {
+    for (const image of includedCandidates.value) {
+      const crop = cropOf(image.key)
+      const result = await $fetch<Omit<Optimized, 'cropJson' | 'madeAt'>>('/api/images/optimize', {
+        method: 'POST',
+        body: { isbn: book.value.isbn, key: image.key, crop }
+      })
+      optimized.value[image.key] = { ...result, cropJson: JSON.stringify(crop), madeAt: Date.now() }
+    }
+  } catch (err) {
+    optimizeError.value = (err as { statusMessage?: string }).statusMessage || 'Optimize failed'
+  } finally {
+    optimizing.value = false
+  }
+}
+
+// Upload your own image; it is saved locally only.
+const uploadError = ref('')
+const uploading = ref(false)
+async function uploadImage(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file || !book.value) return
+  uploadError.value = ''
+  uploading.value = true
+  try {
+    const body = new FormData()
+    body.append('file', file)
+    const { name } = await $fetch<{ name: string }>(`/api/images/uploaded/${book.value.isbn}`, { method: 'POST', body })
+    await refresh()
+    includedImages.value = [...includedImages.value, `upload:${name}`]
+    editingKey.value = `upload:${name}`
+  } catch (err) {
+    uploadError.value = (err as { statusMessage?: string }).statusMessage || 'Upload failed'
+  } finally {
+    uploading.value = false
+    input.value = ''
+  }
+}
+function formatBytes(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`
 }
 </script>
 
@@ -109,6 +268,137 @@ function resetCategories() {
               <li v-for="note in book.merged.categories.notes" :key="note">{{ note }}</li>
             </ul>
           </div>
+
+          <div class="field-label">
+            <strong>Variation</strong>
+          </div>
+          <div class="variation">
+            <template v-if="book.merged.variation.handled">
+              <p>
+                <span class="was">{{ book.merged.variation.currentName || '(no name)' }}</span>
+                <template v-if="book.merged.variation.needsChange"> → <strong>{{ book.merged.variation.proposedName }}</strong></template>
+              </p>
+              <button
+                v-if="book.merged.variation.needsChange"
+                type="button"
+                :class="['pill', { on: changeVariation }]"
+                :aria-pressed="changeVariation"
+                @click="changeVariation = !changeVariation"
+              >
+                {{ changeVariation ? 'Change to Regular' : 'Leave as is' }}
+              </button>
+            </template>
+          </div>
+          <div class="reasons">
+            <ul>
+              <li v-for="note in book.merged.variation.notes" :key="note">{{ note }}</li>
+            </ul>
+            <details v-if="book.merged.variation.preserved.length">
+              <summary>Stays exactly as it is in Square</summary>
+              <ul>
+                <li v-for="line in book.merged.variation.preserved" :key="line">{{ line }}</li>
+              </ul>
+            </details>
+          </div>
+
+          <div class="field-label">
+            <strong>Images</strong>
+            <button :disabled="!imagesChanged" @click="resetImages">Reset</button>
+          </div>
+          <div class="image-cards">
+            <p v-if="!book.imageCandidates.length">No images yet.</p>
+            <div
+              v-for="image in book.imageCandidates"
+              :key="image.key"
+              :class="['image-card', { off: !includedImages.includes(image.key) }]"
+            >
+              <img :src="image.url" :data-key="image.key" alt="" @load="recordSize(image.key, $event)">
+              <div class="image-meta">
+                <strong>{{ image.label }}</strong>
+                <span>
+                  {{ imageDims[image.key] ? `${imageDims[image.key]!.w}×${imageDims[image.key]!.h}` : '…' }}<template v-if="image.bytes"> · {{ formatBytes(image.bytes) }}</template>
+                </span>
+                <span v-if="isCropped(image.key)" class="cropped">Cropped</span>
+              </div>
+              <button type="button" @click="editingKey = editingKey === image.key ? null : image.key">
+                {{ editingKey === image.key ? 'Close editor' : 'Crop / fit' }}
+              </button>
+              <button
+                type="button"
+                :class="['pill', { on: includedImages.includes(image.key) }]"
+                :aria-pressed="includedImages.includes(image.key)"
+                @click="toggleImage(image.key)"
+              >
+                {{ includedImages.includes(image.key) ? 'Included' : 'Not included' }}
+              </button>
+              <p v-if="image.source === 'square' && !includedImages.includes(image.key)" class="warning">
+                Will be deleted from Square.
+              </p>
+            </div>
+            <div class="image-add">
+              <label class="upload-label">
+                Add your own image
+                <input type="file" accept="image/jpeg,image/png,image/webp" :disabled="uploading" @change="uploadImage">
+              </label>
+              <p v-if="uploadError" class="warning">{{ uploadError }}</p>
+            </div>
+          </div>
+          <div class="reasons">
+            <div class="optimize">
+              <button type="button" :disabled="optimizing || !includedCandidates.length" @click="optimizeIncluded">
+                {{ optimizing ? 'Optimizing…' : `Optimize ${includedCandidates.length} included image${includedCandidates.length === 1 ? '' : 's'}` }}
+              </button>
+              <span v-if="allOptimized" class="ok">All included images are optimized.</span>
+              <p v-if="optimizeError" class="warning">{{ optimizeError }}</p>
+              <div v-for="image in includedCandidates.filter(candidate => optimized[candidate.key])" :key="image.key" class="optimized-item">
+                <img :src="`${optimized[image.key]!.url}?t=${optimized[image.key]!.madeAt}`" alt="">
+                <div>
+                  <strong>{{ image.label }}</strong>
+                  <div>{{ optimized[image.key]!.width }}×{{ optimized[image.key]!.height }} · {{ formatBytes(optimized[image.key]!.bytes) }} · JPEG quality {{ optimized[image.key]!.quality }}</div>
+                  <div v-if="isStale(image.key)" class="stale">Out of date: the crop changed. Optimize again.</div>
+                  <div v-for="warning in optimized[image.key]!.warnings" :key="warning" class="warning">{{ warning }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-if="editingImage" class="cropper">
+              <p><strong>Cropping: {{ editingImage.label }}</strong></p>
+              <div
+                class="crop-frame"
+                :style="{ width: `${FRAME}px`, height: `${FRAME}px` }"
+                @pointerdown="dragBegin"
+                @pointermove="dragMove"
+                @pointerup="dragEnd"
+                @pointercancel="dragEnd"
+                @wheel.prevent="wheelZoom"
+              >
+                <img :src="editingImage.url" alt="" draggable="false" :style="frameStyle">
+              </div>
+              <label class="zoom">
+                Zoom
+                <input
+                  type="range"
+                  :min="MIN_ZOOM"
+                  :max="MAX_ZOOM"
+                  step="0.01"
+                  :value="cropOf(editingImage.key).zoom"
+                  @input="zoomTo(Number(($event.target as HTMLInputElement).value))"
+                >
+              </label>
+              <p>
+                <button type="button" :disabled="!isCropped(editingImage.key)" @click="fitWholeCover">Fit whole cover</button>
+                <button type="button" @click="editingKey = null">Done</button>
+              </p>
+              <p>Drag to move, scroll or use the slider to zoom. Zoom out past the middle to shrink the cover and add white around it. White shows where the cover does not fill the frame. Nothing is saved yet.</p>
+            </div>
+            <p v-if="!includedImages.length" class="warning">No images are included, so the item would have none.</p>
+            <ul>
+              <li v-if="book.imageCandidates.some(image => image.source === 'square')">Existing Square images stay unless you turn them off.</li>
+              <li v-if="book.imageCandidates.some(image => image.source === 'isbndb')">
+                The ISBNdb cover is only on by default when the item has no image yet.
+              </li>
+              <li v-else>No ISBNdb cover has been saved for this book.</li>
+            </ul>
+          </div>
         </div>
       </section>
 
@@ -183,6 +473,9 @@ function resetCategories() {
       <h2>Raw ISBNdb JSON</h2>
       <pre v-if="book.isbndbRaw" class="raw">{{ JSON.stringify(book.isbndbRaw, null, 2) }}</pre>
       <p v-else>Nothing saved from ISBNdb for this book yet.</p>
+
+      <h2>Raw Square JSON</h2>
+      <pre class="raw">{{ JSON.stringify(book.squareRaw, null, 2) }}</pre>
     </template>
   </div>
 </template>
@@ -204,10 +497,33 @@ function resetCategories() {
 .reasons p { margin: 0 0 0.25rem; }
 .reasons ul { margin: 0; padding-left: 1rem; }
 
+.variation p { margin: 0 0 0.35rem; }
+.variation .was { color: #555; }
 .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .pill { font: inherit; font-size: 0.9rem; padding: 0.25rem 0.8rem; border: 1px solid #999; border-radius: 999px; background: #fff; color: #333; cursor: pointer; }
 .pill.on { background: #1f6f43; border-color: #1f6f43; color: #fff; }
 .pill.on.suggested { background: #2f5fb3; border-color: #2f5fb3; }
+
+.image-cards { display: flex; flex-wrap: wrap; gap: 1rem; }
+.image-card { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; max-width: 11rem; }
+.image-card img { height: 12rem; max-width: 100%; object-fit: contain; border: 1px solid #ddd; background: #fff; }
+.image-card.off img { opacity: 0.4; }
+.image-meta { display: flex; flex-direction: column; font-size: 0.8rem; color: #555; }
+.image-card .warning { font-size: 0.8rem; margin: 0; }
+
+.image-card .cropped { color: #2f5fb3; font-weight: 600; }
+.image-add { align-self: center; }
+.upload-label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; }
+.optimize { margin-bottom: 0.75rem; }
+.optimize .ok { margin-left: 0.5rem; color: #1f6f43; font-weight: 600; }
+.optimized-item { display: flex; gap: 0.75rem; margin-top: 0.5rem; align-items: flex-start; }
+.optimized-item img { width: 6rem; height: 6rem; object-fit: contain; border: 1px solid #ddd; background: #fff; }
+.optimized-item .warning { font-weight: 400; margin-top: 0.15rem; }
+.optimized-item .stale { color: #8a6500; font-weight: 600; }
+.cropper { margin-bottom: 0.75rem; }
+.crop-frame { position: relative; overflow: hidden; background: #fff; border: 2px solid #333; cursor: grab; touch-action: none; user-select: none; }
+.crop-frame img { position: absolute; max-width: none; pointer-events: none; }
+.zoom { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; }
 
 .compare { border-collapse: collapse; width: 100%; }
 .compare th, .compare td { text-align: left; vertical-align: top; padding: 0.4rem 1rem 0.4rem 0; border-top: 1px solid #ddd; }

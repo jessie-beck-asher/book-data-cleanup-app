@@ -15,9 +15,42 @@ export default defineEventHandler(async (event) => {
   const categories = (data.categories ?? [])
     .map((category: { id: string }) => related.get(category.id)?.category_data?.name as string | undefined)
     .filter(Boolean)
-  const images = (data.image_ids ?? [])
-    .map((imageId: string) => related.get(imageId)?.image_data?.url as string | undefined)
-    .filter(Boolean)
+  const squareImages = ((data.image_ids ?? []) as string[])
+    .map(imageId => ({ id: imageId, url: related.get(imageId)?.image_data?.url as string | undefined }))
+    .filter((image): image is { id: string, url: string } => !!image.url)
+  const images = squareImages.map(image => image.url)
+  const original = await readOriginalInfo(isbn)
+
+  // Every image that could end up on the item. Existing Square images stay unless the owner turns them off;
+  // the ISBNdb cover is only included by default when the item has no image yet.
+  const imageCandidates = [
+    ...squareImages.map(image => ({
+      key: `square:${image.id}`,
+      source: 'square' as const,
+      label: 'Current in Square',
+      url: image.url,
+      bytes: null as number | null,
+      defaultOn: true
+    })),
+    ...(original
+      ? [{
+          key: `isbndb:${isbn}`,
+          source: 'isbndb' as const,
+          label: 'ISBNdb cover',
+          url: `/api/images/original/${isbn}`,
+          bytes: original.bytes,
+          defaultOn: squareImages.length === 0
+        }]
+      : []),
+    ...(await listUploaded(isbn)).map(upload => ({
+      key: `upload:${upload.name}`,
+      source: 'upload' as const,
+      label: 'Your upload',
+      url: `/api/images/uploaded/${isbn}/${upload.name}`,
+      bytes: upload.bytes as number | null,
+      defaultOn: false
+    }))
+  ]
 
   const record = (await readIsbndbStore())[isbn]
   const book = record?.book
@@ -61,10 +94,19 @@ export default defineEventHandler(async (event) => {
         squareDescription: data.description_plaintext ?? data.description ?? '',
         isbndbDescription: isbndb.status === 'found' ? isbndb.description : null
       }),
+      variation: mergeVariation(data),
       categories: mergeCategories({
         squareCategories: categories as string[],
         isbndbSubjects: isbndb.status === 'found' ? isbndb.subjects : []
       })
+    },
+    imageCandidates,
+    // The item exactly as Square returned it, plus the category and image objects it points to.
+    squareRaw: {
+      item,
+      relatedObjects: [...(data.categories ?? []).map((category: { id: string }) => category.id), ...(data.image_ids ?? [])]
+        .map((relatedId: string) => related.get(relatedId))
+        .filter(Boolean)
     },
     categoryChoices: [BOOKS_CATEGORY, ...GENRE_CATEGORIES],
     isbndbRaw: record ?? null

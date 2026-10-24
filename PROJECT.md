@@ -22,7 +22,8 @@ Intended flow:
 - **The owner makes all decisions.** Claude proposes options and a recommendation; nothing is chosen or built until approved.
 - **Slow and conservative.** Small steps, each reviewed before the next.
 - **No writes to Square without explicit per-item user confirmation.** Nothing is ever batch-updated. Steps 1-3 are strictly read-only with respect to Square.
-- **Never touched, under any circumstances:** price (including variation pricing) and custom attributes. The write path must not include them, and the app should preserve them exactly as they are in Square.
+- **Never changed, under any circumstances:** price (including variation pricing) and custom attributes. Square's catalog update replaces the whole item, variations included, so these values are sent back **exactly as pulled**, never edited. The diff shows them as "unchanged", and the version check blocks the update if the item changed in Square since the pull.
+- **Variations (owner-decided):** every book has one variation. If it is not already a plain "Regular" (122 of 1,051 are named after Language/Format item options), the proposal renames it to "Regular" and removes those item options from the variation and the item, keeping the same variation ID so SKU/GTIN, price, on-hand counts, vendor info, unit cost, location settings, channels and images stay. To be tested on the sandbox before production.
 - **Updates are partial, never destructive:** items are never deleted, there is no full-object replacement, and only the specified fields change. The one owner-approved exception is images: the owner can remove images from an item on its detail page (see "Images").
 - **No secrets in chat, code, logs, or git.** See below.
 
@@ -59,7 +60,7 @@ Intended flow:
 | 5 | Handling items with no ISBN or no ISBNdb match | **Decided for no-ISBN items: ignore** (scope is books only). **Decided for ISBN with no ISBNdb match:** stays on the dashboard, labeled "No match"; untouched in Square unless edited by hand and approved |
 | 6 | ISBNdb plan and rate limits | **Decided: Basic plan**, starting with the 7-day free trial. Limits: 5,000 searches/day, 1 request/second, $14.99/month after trial. Design implications below |
 | 7 | Progress tracking and storage | **Decided: three local JSON files** (see "Local data files" below). Still open: file location/names and whether they are git-ignored |
-| 10 | Image handling | **Decided in principle: images are in scope.** ISBNdb image is optimized to PNG before it goes to Square; owner can download, fix by hand, and re-upload, and the fixed version is optimized too. Details under "Images" below |
+| 10 | Image handling | **Decided in principle: images are in scope.** images are chosen, cropped/fitted and optimized to JPEG in the app before they go to Square (see "Images"). Details under "Images" below |
 | 8 | Hosting / how the app runs | **Decided: local only, single user (owner).** Data files stored locally. Backups: see note under "Local data files" |
 | 9 | Where the project lives in git | **Decided: its own repo** (`git init` in this folder; it was not inside a parent repo). Data files and images are git-ignored (`data/`) |
 
@@ -97,19 +98,17 @@ Proposed safeguards (pending approval):
 ## Images (owner-decided requirements; details proposed)
 
 Requirements:
-- After the merge on the item page, the ISBNdb image is optimized for Square and converted to **PNG**.
-- The owner can download the image, fix it locally (crop, zoom, etc.), and re-upload it to replace the proposed one.
-- The re-uploaded fixed image is **also optimized** (same pipeline).
+- After the merge on the item page, the owner picks which images to use, can crop/zoom each one in the app (or upload their own), and presses an **Optimize** button.
+- Optimize produces a **JPEG** and shows a preview with its dimensions and file size. Any later change to the crop makes the preview out of date; sending is blocked until Optimize is run again.
+- The owner's own uploads go through the same optimizer.
 - Optimization must happen **before** anything reaches Square. It can run at send time rather than ahead of time.
 
 Proposed design (pending approval):
 - Original ISBNdb image, optimized version, and any owner-uploaded version are kept in a local images folder (git-ignored, covered by backups), referenced from the merged JSON. The original is never overwritten.
 - One shared optimize step (e.g. the `sharp` library on the Nuxt server) used for both the ISBNdb image and the owner's re-upload. The page shows a preview of exactly what will be sent.
-- Square's image guidance (from docs pasted by the owner): at least 2,000 x 2,000 px recommended; aspect ratio 1:1; JPG/JPEG/PNG/GIF supported (PNG if transparency needed); up to 15 MB per image. Owner requires PNG.
-- **Decided: the image that goes to Square is always a 2000 x 2000 px PNG, optimized to be as performant (small) as possible.** The owner does all cropping by hand on the original before it enters the optimizer; the app never crops. Square's other specs above (1:1, 15 MB limit) are met by this output.
-- The optimizer (shared by the ISBNdb image and the owner's re-upload) does: convert to PNG, resize to 2000 x 2000, compress, strip unneeded metadata. The page previews the exact output and its file size.
-- Proposed handling for inputs that are not square (pending approval): pad to square with a **transparent** background (earlier owner decision) and show a warning, rather than stretching or cropping. Inputs smaller than 2000 px are enlarged to fit and flagged as low resolution.
-- Proposed compression (pending approval): lossless only (maximum PNG compression, metadata stripped), so image quality is never degraded. Lossy PNG palette reduction would be smaller but can band on cover art; the owner may opt in.
+- **Decided (owner, replaces the earlier 2000x2000 PNG decision):** the image that goes to Square is a **square JPEG at about 85-90% quality**, **longest side between 1200 and 2000 px**, **file size 150-500 KB** (never megabytes). Non-square covers are placed on a **white** background to make them square (JPEG has no transparency); the owner chose white because it is more performant. The owner can crop/zoom in the app; the app never crops on its own.
+- Square's own guidance (from docs pasted by the owner): aspect ratio 1:1, JPG/PNG/GIF supported, up to 15 MB. The output above meets it.
+- Optimize (server side, `sharp`, run on the original image, not a preview): square canvas sized to the cover's own height (capped at 2000, at least 1200, so nothing is enlarged), JPEG quality starting around 90 and lowered toward 85 and then the canvas toward 1200 only if the file is over 500 KB. Metadata stripped. The app flags results it cannot get under 500 KB, and results under 150 KB (possible low-quality source, such as ISBNdb's 334x500 thumbnail).
 - The image URL arrives as part of the ISBNdb batch response, so there is no separate ISBNdb API call to get it.
 - ISBNdb image URLs **expire after about 2 hours**. So the app downloads and saves the image files to the local images folder **immediately after each ISBNdb batch response**, and the JSON records the local file path alongside the (expiring) URL. After that, nothing depends on the URL. Which image version(s) to save depends on what the response actually contains (to confirm in Phase 2). Download failures are recorded per book and retried right away; if the URL has already expired, a fresh URL requires re-fetching that ISBN from ISBNdb (which costs quota). To verify: whether fetching the image URL has its own limits.
 - Images change the item's image reference in Square, so image becomes one more allowlisted field in the single-item update, alongside title, description, and categories (not weight; see row 4).

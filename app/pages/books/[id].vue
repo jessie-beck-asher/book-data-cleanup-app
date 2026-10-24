@@ -73,6 +73,7 @@ interface Crop { zoom: number, cx: number, cy: number }
 const FRAME = 360
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 4
+const ZOOM_STEP = 0.01
 const crops = ref<Record<string, Crop>>({ ...(saved?.crops ?? {}) })
 const editingKey = ref<string | null>(null)
 const cropOf = (key: string): Crop => crops.value[key] ?? { zoom: 1, cx: 0.5, cy: 0.5 }
@@ -146,14 +147,18 @@ const optimized = ref<Record<string, Optimized>>({})
 const optimizing = ref(false)
 const optimizeError = ref('')
 const includedCandidates = computed(() => (book.value?.imageCandidates ?? []).filter(image => includedImages.value.includes(image.key)))
+// Only these get a new file made and uploaded. A Square image you have not cropped stays exactly as it is.
+const willUpload = (image: { key: string, source: string }) => image.source !== 'square' || isCropped(image.key)
+const uploadCandidates = computed(() => includedCandidates.value.filter(willUpload))
 const isStale = (key: string) => optimized.value[key]?.cropJson !== JSON.stringify(cropOf(key))
-const allOptimized = computed(() => includedCandidates.value.length > 0 && includedCandidates.value.every(image => optimized.value[image.key] && !isStale(image.key)))
+const allOptimized = computed(() => uploadCandidates.value.length > 0 && uploadCandidates.value.every(image => optimized.value[image.key] && !isStale(image.key)))
 async function optimizeIncluded() {
   if (!book.value) return
   optimizeError.value = ''
   optimizing.value = true
   try {
-    for (const image of includedCandidates.value) {
+    for (const image of uploadCandidates.value) {
+      if (optimized.value[image.key] && !isStale(image.key)) continue
       const crop = cropOf(image.key)
       const result = await $fetch<Omit<Optimized, 'cropJson' | 'madeAt'>>('/api/images/optimize', {
         method: 'POST',
@@ -167,6 +172,14 @@ async function optimizeIncluded() {
     optimizing.value = false
   }
 }
+
+// Optimizing runs by itself shortly after anything that affects the uploaded file changes.
+let optimizeTimer: ReturnType<typeof setTimeout> | undefined
+watch([uploadCandidates, crops], () => {
+  clearTimeout(optimizeTimer)
+  optimizeTimer = setTimeout(optimizeIncluded, 700)
+}, { deep: true })
+onMounted(optimizeIncluded)
 
 // Copy a description to the clipboard, showing "Copied" on that button for a moment.
 const copied = ref<string | null>(null)
@@ -182,9 +195,55 @@ async function copyText(which: string, text: string) {
   }
 }
 
-function reloadPage() {
+// A green toast. After a write the page reloads so everything shows what Square now has; the toast message
+// waits in sessionStorage and appears once the page is back.
+const TOAST_KEY = 'book-toast'
+interface Toast { message: string, problems: string[] }
+const toast = ref<Toast | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | undefined
+function showToast(next: Toast) {
+  toast.value = next
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, next.problems.length ? 15000 : 6000)
+}
+function afterWrite(message: string, problems: string[]) {
+  try {
+    sessionStorage.setItem(TOAST_KEY, JSON.stringify({ message, problems }))
+  } catch {
+    // The page still reloads; it just won't show the toast.
+  }
   window.location.reload()
 }
+onMounted(() => {
+  try {
+    const waiting = sessionStorage.getItem(TOAST_KEY)
+    if (!waiting) return
+    sessionStorage.removeItem(TOAST_KEY)
+    showToast(JSON.parse(waiting))
+  } catch {
+    // No toast.
+  }
+})
+
+// Revert: sends a saved earlier copy of this item back to Square (sandbox only for now).
+const reverting = ref<string | null>(null)
+const revertError = ref('')
+async function revertTo(name: string) {
+  if (!book.value) return
+  revertError.value = ''
+  reverting.value = name
+  try {
+    const result = await $fetch<{ steps: string[], problems: string[] }>(`/api/books/${book.value.id}/revert`, { method: 'POST', body: { confirm: true, backup: name } })
+    afterWrite('Yay! This book was put back to the saved version.', result.problems)
+  } catch (err) {
+    const error = err as { statusMessage?: string, data?: { data?: { completedSteps?: string[] } } }
+    const done = error.data?.data?.completedSteps
+    revertError.value = `${error.statusMessage || 'Revert failed'}${done?.length ? ` (done before it stopped: ${done.join('; ')})` : ''}`
+    reverting.value = null
+  }
+}
+const backupLabel = (backup: { savedAt: string, reason: string }) =>
+  `${new Date(backup.savedAt).toLocaleString()} — ${backup.reason === 'before-revert' ? 'just before a revert' : 'just before an update'}`
 
 // Autosave: every change is written to a local file shortly after it is made. This never touches Square.
 const saveStatus = ref<'idle' | 'saving' | 'saved' | 'failed'>(saved ? 'saved' : 'idle')
@@ -222,15 +281,15 @@ const plan = ref<PlanResult | null>(null)
 const planning = ref(false)
 const sending = ref(false)
 const reviewError = ref('')
-const sendResult = ref<{ steps: string[], problems: string[] } | null>(null)
 async function reviewChanges() {
   if (!book.value) return
   reviewError.value = ''
-  sendResult.value = null
   planning.value = true
   try {
     clearTimeout(saveTimer)
+    clearTimeout(optimizeTimer)
     await saveEdits()
+    await optimizeIncluded()
     plan.value = await $fetch<PlanResult>(`/api/books/${book.value.id}/plan`, { method: 'POST' })
   } catch (err) {
     plan.value = null
@@ -241,12 +300,12 @@ async function reviewChanges() {
 }
 async function sendUpdate() {
   if (!book.value || !plan.value) return
-  if (!window.confirm(`Update this ONE book in Square (${plan.value.environment})? Only the changed rows above will be sent.`)) return
   reviewError.value = ''
   sending.value = true
   try {
-    sendResult.value = await $fetch(`/api/books/${book.value.id}/send`, { method: 'POST', body: { confirm: true } })
+    const result = await $fetch<{ steps: string[], problems: string[] }>(`/api/books/${book.value.id}/send`, { method: 'POST', body: { confirm: true } })
     plan.value = null
+    afterWrite('Yay! This book was updated in Square.', result.problems)
   } catch (err) {
     const error = err as { statusMessage?: string, data?: { data?: { completedSteps?: string[], blockers?: string[] } } }
     const done = error.data?.data?.completedSteps
@@ -444,17 +503,17 @@ function formatBytes(bytes: number) {
           </div>
           <div class="reasons">
             <div class="optimize">
-              <button type="button" :disabled="optimizing || !includedCandidates.length" @click="optimizeIncluded">
-                {{ optimizing ? 'Optimizing…' : `Optimize ${includedCandidates.length} included image${includedCandidates.length === 1 ? '' : 's'}` }}
-              </button>
-              <span v-if="allOptimized" class="ok">All included images are optimized.</span>
+              <strong>Files that will be uploaded</strong>
+              <span v-if="optimizing" class="review-hint">Making previews…</span>
+              <span v-else-if="allOptimized" class="ok">These are the exact files that would be uploaded.</span>
+              <p v-if="includedCandidates.length && !uploadCandidates.length" class="review-hint">No new file is needed: the included images are already in Square and are kept as they are.</p>
               <p v-if="optimizeError" class="warning">{{ optimizeError }}</p>
-              <div v-for="image in includedCandidates.filter(candidate => optimized[candidate.key])" :key="image.key" class="optimized-item">
+              <div v-for="image in uploadCandidates.filter(candidate => optimized[candidate.key])" :key="image.key" class="optimized-item">
                 <img :src="`${optimized[image.key]!.url}?t=${optimized[image.key]!.madeAt}`" alt="">
                 <div>
                   <strong>{{ image.label }}</strong>
                   <div>{{ optimized[image.key]!.width }}×{{ optimized[image.key]!.height }} · {{ formatBytes(optimized[image.key]!.bytes) }} · JPEG quality {{ optimized[image.key]!.quality }}</div>
-                  <div v-if="isStale(image.key)" class="stale">Out of date: the crop changed. Optimize again.</div>
+                  <div v-if="isStale(image.key)" class="stale">Out of date: the crop changed. Updating the preview…</div>
                   <div v-for="warning in optimized[image.key]!.warnings" :key="warning" class="warning">{{ warning }}</div>
                 </div>
               </div>
@@ -474,6 +533,7 @@ function formatBytes(bytes: number) {
               </div>
               <label class="zoom">
                 Zoom
+                <button type="button" aria-label="Zoom out a little" :disabled="cropOf(editingImage.key).zoom <= MIN_ZOOM" @click="zoomTo(cropOf(editingImage.key).zoom - ZOOM_STEP)">−</button>
                 <input
                   type="range"
                   :min="MIN_ZOOM"
@@ -482,6 +542,7 @@ function formatBytes(bytes: number) {
                   :value="cropOf(editingImage.key).zoom"
                   @input="zoomTo(Number(($event.target as HTMLInputElement).value))"
                 >
+                <button type="button" aria-label="Zoom in a little" :disabled="cropOf(editingImage.key).zoom >= MAX_ZOOM" @click="zoomTo(cropOf(editingImage.key).zoom + ZOOM_STEP)">+</button>
               </label>
               <p>
                 <button type="button" :disabled="!isCropped(editingImage.key)" @click="fitWholeCover">Fit whole cover</button>
@@ -506,15 +567,6 @@ function formatBytes(bytes: number) {
           </button>
           <span class="review-hint">Shows exactly what would change. Nothing is sent until you press the update button.</span>
           <p v-if="reviewError" class="warning">{{ reviewError }}</p>
-
-          <div v-if="sendResult" class="send-result">
-            <strong>Updated in Square.</strong>
-            <ul>
-              <li v-for="step in sendResult.steps" :key="step">{{ step }}</li>
-              <li v-for="problem in sendResult.problems" :key="problem" class="warning">{{ problem }}</li>
-            </ul>
-            <button type="button" @click="reloadPage">Reload this page</button>
-          </div>
 
           <div v-if="plan" class="plan">
             <table class="plan-table">
@@ -623,7 +675,28 @@ function formatBytes(bytes: number) {
 
       <h2>Raw Square JSON</h2>
       <pre class="raw">{{ JSON.stringify(book.squareRaw, null, 2) }}</pre>
+
+      <h2>Original Square JSON (before changes from this app)</h2>
+      <p v-if="!book.backups.length">Nothing yet. A copy is saved here automatically right before each update.</p>
+      <p v-if="revertError" class="warning">{{ revertError }}</p>
+      <details v-for="(backup, index) in book.backups" :key="backup.name" class="backup" :open="index === 0">
+        <summary>{{ backupLabel(backup) }} (version {{ backup.itemVersion }})</summary>
+        <p>
+          <button type="button" class="revert" :disabled="!!reverting" @click="revertTo(backup.name)">
+            {{ reverting === backup.name ? 'Reverting…' : 'Revert to this previous version' }}
+          </button>
+          <span class="review-hint">Sandbox only. The current version is saved here first, so you can undo a revert.</span>
+        </p>
+        <pre class="raw">{{ JSON.stringify(backup.item, null, 2) }}</pre>
+      </details>
     </template>
+
+    <div v-if="toast" class="toast" role="status" @click="toast = null">
+      <strong>{{ toast.message }}</strong>
+      <ul v-if="toast.problems.length">
+        <li v-for="problem in toast.problems" :key="problem">{{ problem }}</li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -655,7 +728,11 @@ function formatBytes(bytes: number) {
 .plan-table tr.changed { background: #eef6ff; }
 .plan-table .tag.same { background: #eee; color: #555; }
 .send { margin-top: 0.75rem; font-weight: 600; padding: 0.5rem 1rem; }
-.send-result { margin-top: 0.75rem; color: #1f6f43; }
+.toast { position: fixed; right: 1.25rem; bottom: 1.25rem; max-width: 26rem; padding: 0.85rem 1.1rem; background: #1f7a4a; color: #fff; border-radius: 0.5rem; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); cursor: pointer; z-index: 50; }
+.toast ul { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; }
+.backup { margin: 0.5rem 0; }
+.backup summary { cursor: pointer; font-weight: 600; }
+.revert { font-weight: 600; }
 .blockers { padding-left: 1rem; }
 .proposed h2 .saved { color: #1f6f43; font-weight: 600; margin-left: 0.5rem; }
 .variation p { margin: 0 0 0.35rem; }

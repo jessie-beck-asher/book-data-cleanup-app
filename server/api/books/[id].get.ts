@@ -103,6 +103,8 @@ export default defineEventHandler(async (event) => {
     imageCandidates,
     saved: (await readEdits())[item.id] ?? null,
     // The item exactly as Square returned it, plus the category and image objects it points to.
+    // Square's copy of this item from just before each change this app made, newest first.
+    backups: await listBackups(item.id),
     squareRaw: {
       item,
       relatedObjects: [...(data.categories ?? []).map((category: { id: string }) => category.id), ...(data.image_ids ?? [])]

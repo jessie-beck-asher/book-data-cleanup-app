@@ -17,7 +17,11 @@ export default defineEventHandler(async (event) => {
     const plan = await makePlan(id)
     if (plan.blockers.length || !plan.internal) throw createError({ statusCode: 409, statusMessage: 'This update is blocked', data: { blockers: plan.blockers } })
     if (!plan.rows.some(row => row.changed)) throw createError({ statusCode: 409, statusMessage: 'Nothing would change' })
-    const { item, uploads, deleteImageIds, caption } = plan.internal
+    const { item, original, uploads, deleteImageIds, caption } = plan.internal
+
+    // 0. Keep Square's current copy of the item, so this update can be reverted. If this fails, nothing is sent.
+    await saveBackup(id, original, 'before-update')
+    done.push('Saved a backup of the item as it was')
 
     // 1. Upload new images, unattached (so the item's version does not change yet).
     const newIds: Record<string, string> = {}
@@ -59,16 +63,7 @@ export default defineEventHandler(async (event) => {
     }
 
     // 4. Refresh the local snapshot from Square and record that this book was updated.
-    const refreshed = await squareGet(`/v2/catalog/object/${id}?include_related_objects=true`)
-    const snapshot = await readSnapshot()
-    if (snapshot && refreshed?.object) {
-      snapshot.items = snapshot.items.map(existing => existing.id === id ? refreshed.object : existing)
-      const byId = new Map(snapshot.relatedObjects.map(object => [object.id, object]))
-      for (const imageId of deletable) byId.delete(imageId)
-      for (const object of refreshed.related_objects ?? []) byId.set(object.id, object)
-      snapshot.relatedObjects = [...byId.values()]
-      await writeSnapshot(snapshot)
-    }
+    await refreshSnapshotItem(id, deletable)
     await markUpdated(id)
     return { updated: true, steps: done, problems: deleteProblems }
   } catch (error: any) {

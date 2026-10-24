@@ -13,7 +13,7 @@ export interface UpdatePlan {
   warnings: string[]
   rows: PlanRow[]
   // Internal, used by the send route; not returned to the browser.
-  internal?: { item: any, uploads: Upload[], deleteImageIds: string[], caption: string }
+  internal?: { item: any, original: any, uploads: Upload[], deleteImageIds: string[], caption: string }
 }
 
 const DEFAULT_CROP = { zoom: 1, cx: 0.5, cy: 0.5 }
@@ -262,6 +262,6 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
 
   if (!plan.rows.some(row => row.changed)) plan.warnings.push('Nothing would change in Square.')
   // Slots like #new-1 in image_ids are replaced with real image IDs by the send route.
-  plan.internal = { item, uploads, deleteImageIds: reallyDelete, caption: data.name ?? '' }
+  plan.internal = { item, original, uploads, deleteImageIds: reallyDelete, caption: data.name ?? '' }
   return plan
 }

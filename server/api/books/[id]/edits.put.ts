@@ -30,6 +30,8 @@ export default defineEventHandler(async (event) => {
     categories: body.categories,
     changeVariation: body.changeVariation,
     includedImages: body.includedImages,
+    primaryImage: isText(body.primaryImage, 200) ? body.primaryImage : null,
+    sprayedEdges: isTextList(body.sprayedEdges, 100) ? body.sprayedEdges : [],
     crops
   })
   return { savedAt: saved.savedAt }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { imageNameFor, looksSprayed } from '~~/shared/imageNames'
 const route = useRoute()
 const { data: book, error, refresh } = await useFetch(`/api/books/${route.params.id}`)
 
@@ -42,6 +43,24 @@ const defaultImageKeys = () => (book.value?.imageCandidates ?? []).filter(image 
 // Saved picks are kept only for images that still exist (an upload may have been removed from disk).
 const existingImageKeys = new Set((book.value?.imageCandidates ?? []).map(image => image.key))
 const includedImages = ref<string[]>(saved ? saved.includedImages.filter(key => existingImageKeys.has(key)) : defaultImageKeys())
+// Image names in Square: the title without the author, with dashes, then "-book-cover", plus "-sprayed-edges" on images marked here.
+// An image already named with sprayed-edges starts out marked.
+const sprayedEdges = ref<string[]>(saved?.sprayedEdges ?? (book.value?.imageCandidates ?? []).filter(image => looksSprayed(image.squareName)).map(image => image.key))
+function toggleSprayed(key: string) {
+  sprayedEdges.value = sprayedEdges.value.includes(key) ? sprayedEdges.value.filter(entry => entry !== key) : [...sprayedEdges.value, key]
+}
+const imageNameOf = (key: string) => imageNameFor(proposedTitle.value, sprayedEdges.value.includes(key))
+const duplicateNames = computed(() => {
+  const names = includedImages.value.map(imageNameOf)
+  return new Set(names).size !== names.length
+})
+
+// The primary image is the one sent first to Square. Until one is chosen, it is the first included image.
+const primaryImage = ref<string | null>(saved?.primaryImage ?? null)
+const effectivePrimary = computed(() => {
+  const included = (book.value?.imageCandidates ?? []).filter(image => includedImages.value.includes(image.key))
+  return primaryImage.value && included.some(image => image.key === primaryImage.value) ? primaryImage.value : included[0]?.key ?? null
+})
 function toggleImage(key: string) {
   includedImages.value = includedImages.value.includes(key)
     ? includedImages.value.filter(included => included !== key)
@@ -225,6 +244,22 @@ onMounted(() => {
   }
 })
 
+// Pull just this one book from Square (a read) and reload.
+const pulling = ref(false)
+const pullError = ref('')
+async function pullThisBook() {
+  if (!book.value) return
+  pullError.value = ''
+  pulling.value = true
+  try {
+    await $fetch(`/api/books/${book.value.id}/pull`, { method: 'POST' })
+    afterWrite('Pulled the latest version of this book from Square.', [])
+  } catch (err) {
+    pullError.value = (err as { statusMessage?: string }).statusMessage || 'Could not pull this book'
+    pulling.value = false
+  }
+}
+
 // Revert: sends a saved earlier copy of this item back to Square (sandbox only for now).
 const reverting = ref<string | null>(null)
 const revertError = ref('')
@@ -261,6 +296,8 @@ async function saveEdits() {
         categories: selectedCategories.value,
         changeVariation: changeVariation.value,
         includedImages: includedImages.value,
+        primaryImage: primaryImage.value,
+        sprayedEdges: sprayedEdges.value,
         crops: crops.value
       }
     })
@@ -270,7 +307,7 @@ async function saveEdits() {
     saveStatus.value = 'failed'
   }
 }
-watch([proposedTitle, proposedDescription, selectedCategories, changeVariation, includedImages, crops], () => {
+watch([proposedTitle, proposedDescription, selectedCategories, changeVariation, includedImages, primaryImage, sprayedEdges, crops], () => {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(saveEdits, 600)
 }, { deep: true })
@@ -354,6 +391,11 @@ function formatBytes(bytes: number) {
         <span v-if="book.archived" class="tag">archived</span>
         <small>ISBN {{ book.isbn }}</small>
       </h1>
+      <p>
+        <button type="button" :disabled="pulling" @click="pullThisBook">{{ pulling ? 'Pulling…' : 'Pull this book from Square' }}</button>
+        <span class="review-hint">Reads only this item from Square and refreshes it here. Your saved edits are kept. Nothing is changed in Square.</span>
+      </p>
+      <p v-if="pullError" class="warning">{{ pullError }}</p>
 
       <p v-if="book.isbndb.status === 'not_fetched'" class="note">ISBNdb data has not been fetched for this book yet.</p>
       <p v-else-if="book.isbndb.status === 'no_match'" class="note">ISBNdb has no match for this ISBN.</p>
@@ -489,6 +531,19 @@ function formatBytes(bytes: number) {
               >
                 {{ includedImages.includes(image.key) ? 'Included' : 'Not included' }}
               </button>
+              <template v-if="includedImages.includes(image.key)">
+                <span class="image-name">Name in Square: <code>{{ imageNameOf(image.key) }}</code></span>
+                <button
+                  type="button"
+                  :class="['pill', { on: sprayedEdges.includes(image.key) }]"
+                  :aria-pressed="sprayedEdges.includes(image.key)"
+                  @click="toggleSprayed(image.key)"
+                >
+                  Sprayed edges
+                </button>
+              </template>
+              <span v-if="includedImages.includes(image.key) && effectivePrimary === image.key" class="primary-badge">★ Primary (sent first)</span>
+              <button v-else-if="includedImages.includes(image.key)" type="button" @click="primaryImage = image.key">Make primary</button>
               <p v-if="image.source === 'square' && !includedImages.includes(image.key)" class="warning">
                 Will be deleted from Square.
               </p>
@@ -550,6 +605,7 @@ function formatBytes(bytes: number) {
               </p>
               <p>Drag to move, scroll or use the slider to zoom. Zoom out past the middle to shrink the cover and add white around it. White shows where the cover does not fill the frame. Nothing is saved yet.</p>
             </div>
+            <p v-if="duplicateNames" class="warning">Two included images would get the same name. Mark one of them as Sprayed edges.</p>
             <p v-if="!includedImages.length" class="warning">No images are included, so the item would have none.</p>
             <ul>
               <li v-if="book.imageCandidates.some(image => image.source === 'square')">Existing Square images stay unless you turn them off.</li>
@@ -585,7 +641,7 @@ function formatBytes(bytes: number) {
             <ul v-if="plan.warnings.length">
               <li v-for="warning in plan.warnings" :key="warning" class="incomplete-note">{{ warning }}</li>
             </ul>
-            <p v-if="!plan.writesEnabled" class="warning">Writing is only enabled in the sandbox. This is production, so the update button is off.</p>
+            <p v-if="!plan.writesEnabled" class="warning">Writing to production is off for this book, so the update button is off.</p>
             <button type="button" class="send" :disabled="!plan.canSend || sending" @click="sendUpdate">
               {{ sending ? 'Updating…' : `Looks good, update this book in Square (${plan.environment})` }}
             </button>
@@ -685,7 +741,7 @@ function formatBytes(bytes: number) {
           <button type="button" class="revert" :disabled="!!reverting" @click="revertTo(backup.name)">
             {{ reverting === backup.name ? 'Reverting…' : 'Revert to this previous version' }}
           </button>
-          <span class="review-hint">Sandbox only. The current version is saved here first, so you can undo a revert.</span>
+          <span class="review-hint">The current version is saved here first, so you can undo a revert.</span>
         </p>
         <pre class="raw">{{ JSON.stringify(backup.item, null, 2) }}</pre>
       </details>
@@ -749,6 +805,8 @@ function formatBytes(bytes: number) {
 .image-meta { display: flex; flex-direction: column; font-size: 0.8rem; color: #555; }
 .image-card .warning { font-size: 0.8rem; margin: 0; }
 
+.image-card .image-name { font-size: 0.8rem; color: #444; word-break: break-all; }
+.image-card .primary-badge { font-size: 0.85rem; font-weight: 600; color: #8a5a00; background: #fff3cd; border: 1px solid #e0b84a; border-radius: 999px; padding: 0.2rem 0.7rem; }
 .image-card .cropped { color: #2f5fb3; font-weight: 600; }
 .image-add { align-self: center; }
 .upload-label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; }

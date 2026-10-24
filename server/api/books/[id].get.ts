@@ -16,8 +16,8 @@ export default defineEventHandler(async (event) => {
     .map((category: { id: string }) => related.get(category.id)?.category_data?.name as string | undefined)
     .filter(Boolean)
   const squareImages = ((data.image_ids ?? []) as string[])
-    .map(imageId => ({ id: imageId, url: related.get(imageId)?.image_data?.url as string | undefined }))
-    .filter((image): image is { id: string, url: string } => !!image.url)
+    .map(imageId => ({ id: imageId, url: related.get(imageId)?.image_data?.url as string | undefined, name: related.get(imageId)?.image_data?.name as string | undefined }))
+    .filter((image): image is { id: string, url: string, name: string | undefined } => !!image.url)
   const images = squareImages.map(image => image.url)
   const original = await readOriginalInfo(isbn)
 
@@ -29,6 +29,7 @@ export default defineEventHandler(async (event) => {
       source: 'square' as const,
       label: 'Current in Square',
       url: image.url,
+      squareName: image.name ?? '',
       bytes: null as number | null,
       defaultOn: true
     })),
@@ -38,6 +39,7 @@ export default defineEventHandler(async (event) => {
           source: 'isbndb' as const,
           label: 'ISBNdb cover',
           url: `/api/images/original/${isbn}`,
+          squareName: '',
           bytes: original.bytes,
           defaultOn: squareImages.length === 0
         }]
@@ -47,6 +49,7 @@ export default defineEventHandler(async (event) => {
       source: 'upload' as const,
       label: 'Your upload',
       url: `/api/images/uploaded/${isbn}/${upload.name}`,
+      squareName: '',
       bytes: upload.bytes as number | null,
       defaultOn: false
     }))

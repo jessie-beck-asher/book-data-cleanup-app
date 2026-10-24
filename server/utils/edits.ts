@@ -10,6 +10,10 @@ export interface SavedEdit {
   categories: string[]
   changeVariation: boolean
   includedImages: string[]
+  // The image sent first to Square (its primary image). Null or missing means the first included image in the default order.
+  primaryImage?: string | null
+  // Image keys marked as the sprayed-edges image; it only changes the name given to the image in Square.
+  sprayedEdges?: string[]
   crops: Record<string, SavedCrop>
   savedAt: string
   // Flips to true only after Square confirms an update.

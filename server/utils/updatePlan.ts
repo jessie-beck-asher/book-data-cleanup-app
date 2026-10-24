@@ -1,10 +1,11 @@
 // Builds the single-item update for one book: the diff the owner reviews and the exact object that would be sent.
 // Building a plan only reads (local files plus one GET of the live item). Sending is in the send route.
 import { readFile } from 'node:fs/promises'
+import { imageNameFor, looksSprayed } from '../../shared/imageNames.ts'
 
 export interface PlanRow { field: string, before: string, after: string, changed: boolean }
 
-interface Upload { key: string, label: string, isbn: string, slot: string, bytes: number, width: number }
+interface Upload { key: string, label: string, isbn: string, slot: string, bytes: number, width: number, name: string }
 
 export interface UpdatePlan {
   itemId: string
@@ -13,7 +14,7 @@ export interface UpdatePlan {
   warnings: string[]
   rows: PlanRow[]
   // Internal, used by the send route; not returned to the browser.
-  internal?: { item: any, original: any, uploads: Upload[], deleteImageIds: string[], caption: string }
+  internal?: { item: any, original: any, uploads: Upload[], deleteImageIds: string[], renames: { imageId: string, name: string }[], caption: string }
 }
 
 const DEFAULT_CROP = { zoom: 1, cx: 0.5, cy: 0.5 }
@@ -168,7 +169,18 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
   const available = new Set([...currentImageIds.map(id => `square:${id}`), ...(hasIsbndbCover ? [`isbndb:${isbn}`] : []), ...uploadedNames])
   const included = new Set(edit.includedImages.filter(key => available.has(key)))
 
+  // Names given to images in Square. An image already named "sprayed-edges" starts out marked.
+  const sprayed = new Set(edit.sprayedEdges ?? currentImageIds.filter(id => looksSprayed(relatedById.get(id)?.image_data?.name)).map(id => `square:${id}`))
+  const nameForKey = (key: string) => imageNameFor(title, sprayed.has(key))
+  const renames: { imageId: string, name: string }[] = []
+  const usedElsewhere = new Set<string>()
+  for (const other of snapshot.items) {
+    if (other.id === itemId) continue
+    for (const id of other.item_data?.image_ids ?? []) usedElsewhere.add(id)
+  }
   const finalIds: string[] = []
+  // Which final image ID (or #new slot) belongs to which image key, so the primary one can be moved to the front.
+  const finalByKey = new Map<string, string>()
   const imageLines: string[] = []
 
   async function prepareUpload(key: string, label: string) {
@@ -189,7 +201,7 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
     }
     for (const warning of meta.warnings ?? []) plan.warnings.push(`${label}: ${warning}`)
     if (size > MAX_BYTES) plan.blockers.push(`"${label}" is ${Math.round(size / 1024)} KB, over the 500 KB limit.`)
-    uploads.push({ key, label, isbn, slot, bytes: size, width: meta.width ?? 0 })
+    uploads.push({ key, label, isbn, slot, bytes: size, width: meta.width ?? 0, name: nameForKey(key) })
     return { slot, size, width: meta.width ?? 0 }
   }
 
@@ -204,11 +216,21 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
       deleteImageIds.push(id)
       if (prepared) {
         finalIds.push(prepared.slot)
-        imageLines.push(`Replace ${id} with your cropped, optimized version (${prepared.width}×${prepared.width}, ${Math.round(prepared.size / 1024)} KB)`)
+        finalByKey.set(key, prepared.slot)
+        imageLines.push(`Replace ${id} with your cropped, optimized version named ${nameForKey(key)} (${prepared.width}×${prepared.width}, ${Math.round(prepared.size / 1024)} KB)`)
       }
     } else {
       finalIds.push(id)
-      imageLines.push(`Keep ${id} as it is`)
+      finalByKey.set(key, id)
+      const currentName: string = relatedById.get(id)?.image_data?.name ?? ''
+      if (currentName === nameForKey(key)) imageLines.push(`Keep ${id} as it is`)
+      else if (usedElsewhere.has(id)) {
+        imageLines.push(`Keep ${id} as it is (not renamed: another Square item uses it)`)
+        plan.warnings.push(`Image ${id} is also used by another Square item, so it was not renamed.`)
+      } else {
+        renames.push({ imageId: id, name: nameForKey(key) })
+        imageLines.push(`Rename ${id} from "${currentName || '(no name)'}" to "${nameForKey(key)}"`)
+      }
     }
   }
   for (const key of [...(hasIsbndbCover ? [`isbndb:${isbn}`] : []), ...uploadedNames]) {
@@ -217,7 +239,8 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
     const prepared = await prepareUpload(key, label)
     if (prepared) {
       finalIds.push(prepared.slot)
-      imageLines.push(`Add ${label} (${prepared.width}×${prepared.width}, ${Math.round(prepared.size / 1024)} KB)`)
+      finalByKey.set(key, prepared.slot)
+      imageLines.push(`Add ${label} named ${nameForKey(key)} (${prepared.width}×${prepared.width}, ${Math.round(prepared.size / 1024)} KB)`)
     }
   }
 
@@ -230,6 +253,20 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
   }
   for (const id of shared) plan.warnings.push(`Image ${id} is also used by another Square item, so it is removed from this item but not deleted from Square.`)
   const reallyDelete = deleteImageIds.filter(id => !shared.has(id))
+
+  // The first image is the primary one. The owner's pick goes first; the rest keep their order.
+  const primaryId = edit.primaryImage && included.has(edit.primaryImage) ? finalByKey.get(edit.primaryImage) : undefined
+  if (primaryId && finalIds[0] !== primaryId) {
+    finalIds.splice(finalIds.indexOf(primaryId), 1)
+    finalIds.unshift(primaryId)
+  }
+  if (finalIds.length && finalIds[0] !== currentImageIds[0]) {
+    const firstKey = [...finalByKey].find(([, id]) => id === finalIds[0])?.[0] ?? ''
+    imageLines.push(`Primary (first) image is now ${firstKey.startsWith('square:') ? firstKey.slice(7) : firstKey.startsWith('isbndb:') ? 'the ISBNdb cover' : 'your upload'}`)
+  }
+
+  const finalNames = [...finalByKey].filter(([, id]) => finalIds.includes(id)).map(([key]) => nameForKey(key))
+  if (new Set(finalNames).size !== finalNames.length) plan.blockers.push('Two images would get the same name. Mark one of them as the sprayed-edges image.')
 
   const imagesChanged = imageLines.some(line => !line.startsWith('Keep'))
   plan.rows.push({ field: 'Images', before: list(currentImageIds), after: imageLines.join('\n') || '(none)', changed: imagesChanged })
@@ -262,6 +299,6 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
 
   if (!plan.rows.some(row => row.changed)) plan.warnings.push('Nothing would change in Square.')
   // Slots like #new-1 in image_ids are replaced with real image IDs by the send route.
-  plan.internal = { item, original, uploads, deleteImageIds: reallyDelete, caption: data.name ?? '' }
+  plan.internal = { item, original, uploads, deleteImageIds: reallyDelete, renames, caption: data.name ?? '' }
   return plan
 }

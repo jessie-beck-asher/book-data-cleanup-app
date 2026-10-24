@@ -8,7 +8,7 @@ export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') ?? ''
   const body = await readBody<{ confirm?: boolean, backup?: string }>(event).catch(() => null)
   if (body?.confirm !== true || !body.backup) throw createError({ statusCode: 400, statusMessage: 'The revert needs a backup and your click' })
-  if (currentEnvironmentName() !== 'sandbox') throw createError({ statusCode: 403, statusMessage: 'Writing to Square is only enabled in the sandbox for now' })
+  await assertWritesEnabledFor(id)
   if (reverting) throw createError({ statusCode: 409, statusMessage: 'A revert is already running' })
   reverting = true
 

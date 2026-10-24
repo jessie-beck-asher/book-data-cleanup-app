@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') ?? ''
   const body = await readBody<{ confirm?: boolean }>(event).catch(() => null)
   if (body?.confirm !== true) throw createError({ statusCode: 400, statusMessage: 'The update needs your confirmation' })
-  if (currentEnvironmentName() !== 'sandbox') throw createError({ statusCode: 403, statusMessage: 'Writing to Square is only enabled in the sandbox for now' })
+  await assertWritesEnabledFor(id)
   if (sending) throw createError({ statusCode: 409, statusMessage: 'An update is already running' })
   sending = true
 
@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
     const plan = await makePlan(id)
     if (plan.blockers.length || !plan.internal) throw createError({ statusCode: 409, statusMessage: 'This update is blocked', data: { blockers: plan.blockers } })
     if (!plan.rows.some(row => row.changed)) throw createError({ statusCode: 409, statusMessage: 'Nothing would change' })
-    const { item, original, uploads, deleteImageIds, caption } = plan.internal
+    const { item, original, uploads, deleteImageIds, renames, caption } = plan.internal
 
     // 0. Keep Square's current copy of the item, so this update can be reverted. If this fails, nothing is sent.
     await saveBackup(id, original, 'before-update')
@@ -29,9 +29,9 @@ export default defineEventHandler(async (event) => {
       const form = new FormData()
       form.append('request', new Blob([JSON.stringify({
         idempotency_key: crypto.randomUUID(),
-        image: { type: 'IMAGE', id: '#image', image_data: { caption } }
+        image: { type: 'IMAGE', id: '#image', image_data: { caption, name: upload.name } }
       })], { type: 'application/json' }))
-      form.append('file', new Blob([await readFile(optimizedPath(upload.isbn, upload.key))], { type: 'image/jpeg' }), `${upload.isbn}.jpg`)
+      form.append('file', new Blob([await readFile(optimizedPath(upload.isbn, upload.key))], { type: 'image/jpeg' }), `${upload.name}.jpg`)
       const result = await squareWriteForm('/v2/catalog/images', form)
       newIds[upload.slot] = result.image.id
       done.push(`Uploaded ${upload.label}`)
@@ -42,8 +42,22 @@ export default defineEventHandler(async (event) => {
     await squareWriteJson('/v2/catalog/object', { idempotency_key: crypto.randomUUID(), object: item })
     done.push('Updated the item')
 
+    // 2b. Rename images that stay on the item. This changes only the image's own name, in place. A failure does not undo the update.
+    const renameProblems: string[] = []
+    for (const rename of renames) {
+      try {
+        const current = await squareGet(`/v2/catalog/object/${rename.imageId}`)
+        const object = current.object
+        object.image_data = { ...object.image_data, name: rename.name }
+        await squareWriteJson('/v2/catalog/object', { idempotency_key: crypto.randomUUID(), object })
+        done.push(`Renamed image to ${rename.name}`)
+      } catch (error: any) {
+        renameProblems.push(`Could not rename image ${rename.imageId} to ${rename.name}: ${error?.statusMessage ?? 'unknown error'}. The rest of the update went through.`)
+      }
+    }
+
     // 3. Delete images that were removed. Every one is saved locally first; a failure here does not undo the update.
-    const deleteProblems: string[] = []
+    const deleteProblems: string[] = [...renameProblems]
     const deletable: string[] = []
     for (const imageId of deleteImageIds) {
       try {

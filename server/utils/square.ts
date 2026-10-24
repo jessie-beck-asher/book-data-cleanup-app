@@ -51,8 +51,9 @@ function squareConfig() {
 
 async function squareFetch(path: string, init: { method: string, json?: unknown, form?: FormData }, write: boolean) {
   const { environment, token } = squareConfig()
-  if (write && environment !== 'sandbox') {
-    throw createError({ statusCode: 403, statusMessage: 'Writing to Square is only enabled in the sandbox for now' })
+  // Backstop: in production nothing is written unless at least one item has been allowed. The routes check the specific item.
+  if (write && environment !== 'sandbox' && !(await productionAllowedItemIds()).length) {
+    throw createError({ statusCode: 403, statusMessage: 'Writing to the production Square account is not enabled' })
   }
   const response = await fetch(`${BASE_URLS[environment]}${path}`, {
     method: init.method,

@@ -69,6 +69,8 @@ Intended flow:
 - Check GTIN first, then SKU. Open: what to do if both are present and differ, or if an item has several variations with different ISBNs (flag for manual review rather than guess).
 - Normalize before lookup (strip hyphens/spaces); accept ISBN-10 and ISBN-13 and validate check digits. Items with no ISBN are out of scope and ignored; the app only handles books.
 - Phase 1 should first report counts only (items with GTIN ISBN, SKU ISBN, both, ambiguous, plus a total of ignored non-ISBN items) so you can sanity-check before any ISBNdb calls are spent.
+- **Archived items are included** (owner decision, so updated data is ready if she re-activates them) and are marked "archived" in the app.
+- Production check (counts only): 0 items have conflicting valid ISBNs across variations, so one ISBN per book item holds. Checking the SKU only when the GTIN is empty lost no ISBNs. Non-book items are simply not shown; nothing is stored for them.
 
 ## Updatable fields: things to verify in Phase 1 (read-only)
 

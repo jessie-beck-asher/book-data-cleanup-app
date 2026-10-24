@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { imageNameFor, looksSprayed } from '~~/shared/imageNames'
+import { weightInPounds } from '~~/shared/weight'
 const route = useRoute()
 const { data: book, error, refresh } = await useFetch(`/api/books/${route.params.id}`)
 
@@ -10,6 +11,7 @@ function resetTitle() {
   proposedTitle.value = book.value?.merged.title.title ?? ''
 }
 
+const isbndbWeight = computed(() => weightInPounds(book.value?.isbndb.dimensions))
 const proposedDescription = ref(saved?.description ?? book.value?.merged.description.description ?? '')
 // Red outline stays until the description is edited: Square's text is cut off and ISBNdb's looks like another book.
 const descriptionNeedsAttention = computed(() => {
@@ -225,13 +227,15 @@ function showToast(next: Toast) {
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { toast.value = null }, next.problems.length ? 15000 : 6000)
 }
-function afterWrite(message: string, problems: string[]) {
+function afterWrite(message: string, problems: string[], backToDashboard = false) {
   try {
     sessionStorage.setItem(TOAST_KEY, JSON.stringify({ message, problems }))
   } catch {
     // The page still reloads; it just won't show the toast.
   }
-  window.location.reload()
+  // The dashboard puts itself back where it was (see app/pages/index.vue) and shows the toast.
+  if (backToDashboard) window.location.assign('/')
+  else window.location.reload()
 }
 onMounted(() => {
   try {
@@ -342,7 +346,7 @@ async function sendUpdate() {
   try {
     const result = await $fetch<{ steps: string[], problems: string[] }>(`/api/books/${book.value.id}/send`, { method: 'POST', body: { confirm: true } })
     plan.value = null
-    afterWrite('Yay! This book was updated in Square.', result.problems)
+    afterWrite('Yay! This book was updated in Square.', result.problems, !result.problems.length)
   } catch (err) {
     const error = err as { statusMessage?: string, data?: { data?: { completedSteps?: string[], blockers?: string[] } } }
     const done = error.data?.data?.completedSteps
@@ -706,7 +710,10 @@ function formatBytes(bytes: number) {
             <td>Not available through Square's API</td>
             <td>
               <template v-if="book.isbndb.status === 'found'">
-                {{ book.isbndb.dimensions ? JSON.stringify(book.isbndb.dimensions) : 'Not provided by ISBNdb' }}
+                <template v-if="isbndbWeight">
+                  {{ isbndbWeight.pounds }} lb<small v-if="isbndbWeight.from"> (converted from {{ isbndbWeight.from }})</small>
+                </template>
+                <template v-else>Not provided by ISBNdb</template>
               </template>
               <template v-else>—</template>
             </td>

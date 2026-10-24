@@ -22,9 +22,10 @@ const sameCrop = (a: SavedCrop, b: SavedCrop) => a.zoom === b.zoom && a.cx === b
 const cropFor = (edit: SavedEdit, key: string): SavedCrop => edit.crops[key] ?? DEFAULT_CROP
 
 const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-// Square's description_html: paragraphs for blank lines, <br> for single line breaks.
+// Square's description_html: Square shows each <p> on its own line with no gap, so a blank line is an empty paragraph between them.
+// Single line breaks are <br>.
 export function plainToHtml(text: string) {
-  return tidyText(text).split(/\n{2,}/).filter(Boolean).map(paragraph => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`).join('')
+  return tidyText(text).split(/\n{2,}/).filter(Boolean).map(paragraph => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`).join('<p><br></p>')
 }
 
 function money(value: { amount?: number, currency?: string } | undefined) {

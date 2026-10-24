@@ -35,10 +35,11 @@ export function mergeCategories(input: { squareCategories: string[], isbndbSubje
     const subjects = input.isbndbSubjects.map(subject => subject.toLowerCase())
     const matches = new Set<(typeof GENRE_CATEGORIES)[number]>()
     for (const genre of GENRE_CATEGORIES) {
-      if (SUBJECT_HINTS[genre].some(hint => subjects.some(subject => subject.includes(hint)))) matches.add(genre)
+      // A subject that is the genre's own name is always a match, on top of the hints.
+      if ([genre.toLowerCase(), ...SUBJECT_HINTS[genre]].some(hint => subjects.some(subject => subject.includes(hint)))) matches.add(genre)
     }
-    // Fantasy and romance together is how this shop uses "Romantasy".
-    if (subjects.some(subject => subject.includes('fantasy')) && subjects.some(subject => subject.includes('romance'))) matches.add('Romantasy')
+    // Fantasy, alone or with romance, is how this shop uses "Romantasy".
+    if (subjects.some(subject => subject.includes('fantasy'))) matches.add('Romantasy')
 
     for (const genre of GENRE_CATEGORIES) {
       if (!matches.has(genre)) continue

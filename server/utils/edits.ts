@@ -14,6 +14,8 @@ export interface SavedEdit {
   primaryImage?: string | null
   // Image keys marked as the sprayed-edges image; it only changes the name given to the image in Square.
   sprayedEdges?: string[]
+  // Words added to the end of an image's name in Square, by image key (for a supporting image that is not sprayed).
+  imageNameExtras?: Record<string, string>
   crops: Record<string, SavedCrop>
   savedAt: string
   // Flips to true only after Square confirms an update.

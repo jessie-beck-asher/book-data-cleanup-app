@@ -17,6 +17,8 @@ export interface MergedDescription {
   removedPublisherTag: string | null
   // True when the Square description was used and appears to end mid-sentence.
   looksCutOff: boolean
+  // The ISBNdb description with every rule applied, for the owner to accept when it was flagged as possibly another book.
+  isbndbVersion?: string | null
   notes: string[]
 }
 
@@ -48,7 +50,7 @@ export function overlapWithSquare(squareText: string, isbndbText: string): numbe
   return shared / squareShingles.size
 }
 
-function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescription: string | null, series?: string | null }): MergedDescription {
+function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescription: string | null }): MergedDescription {
   const notes: string[] = []
   const square = stripPublisherTag(input.squareDescription ?? '')
   const isbndbText = input.isbndbDescription ? tidyText(input.isbndbDescription) : ''
@@ -86,15 +88,24 @@ function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescripti
   return squareFallback(`The ISBNdb description shares only ${Math.round(overlap * 100)}% of its wording with the Square description, so it may be for a different book. Using the Square description instead.`)
 }
 
-// The proposal never starts or ends with quote marks and has no "--" (see cleanDescription).
-export function mergeDescription(input: { squareDescription: string, isbndbDescription: string | null, series?: string | null }): MergedDescription {
-  const merged = mergeDescriptionRaw(input)
-  let description = cleanDescription(merged.description)
-  const notes = [...merged.notes]
-  // A series found in the title goes on a line of its own at the top.
-  if (input.series && description && !/^part of the /i.test(description)) {
-    description = `Part of the ${input.series} series\n\n${description}`
-    notes.push(`Added "Part of the ${input.series} series" at the top.`)
+// What the title says about a series goes at the top, one line each, with a blank line before the blurb.
+function withSeriesLines(description: string, input: { series?: string | null, bookOf?: string | null }): { description: string, added: string[] } {
+  const lines: string[] = []
+  if (input.bookOf) lines.push(input.bookOf)
+  // "Book 2 of the Nightborn Duet" already says it, so the "Part of" line is left out when it names the same series.
+  if (input.series && !(input.bookOf && input.bookOf.toLowerCase().endsWith(`of the ${input.series.toLowerCase()}`))) lines.push(`Part of the ${input.series} series`)
+  if (lines.length && description && !/^(?:part of the|(?:book|vol(?:ume)?\.?|part)\s+(?:\d+|\w+)\s+of the) /i.test(description)) {
+    return { description: `${lines.join('\n\n')}\n\n${description}`, added: lines }
   }
-  return { ...merged, description, notes }
+  return { description, added: [] }
+}
+
+// The proposal never starts or ends with quote marks and has no "--" (see cleanDescription).
+export function mergeDescription(input: { squareDescription: string, isbndbDescription: string | null, series?: string | null, bookOf?: string | null }): MergedDescription {
+  const merged = mergeDescriptionRaw(input)
+  const notes = [...merged.notes]
+  const result = withSeriesLines(cleanDescription(merged.description), input)
+  if (result.added.length) notes.push(`Added "${result.added.join('" and "')}" at the top.`)
+  const isbndbVersion = input.isbndbDescription ? withSeriesLines(cleanDescription(input.isbndbDescription), input).description : null
+  return { ...merged, description: result.description, isbndbVersion, notes }
 }

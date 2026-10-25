@@ -43,9 +43,7 @@ function splitSentences(paragraph: string): string[] {
 }
 
 // A single-block paragraph of 6+ sentences gets blank lines, in groups of 4-5 sentences (3 each for 6, 5 and 4 for 9, ...).
-// Paragraphs that already have line breaks are left as written.
 export function breakLongParagraph(paragraph: string): string {
-  if (paragraph.includes('\n')) return paragraph
   const sentences = splitSentences(paragraph)
   if (sentences.length < 6) return paragraph
   const groups = Math.ceil(sentences.length / 5)
@@ -57,16 +55,25 @@ export function breakLongParagraph(paragraph: string): string {
 
 // For descriptions going to Square: drops "- Provided by publisher." wherever it appears (ISBNdb usually has it right after
 // the closing quote, like `...ablaze?"-- Provided by publisher.`), drops quote marks (and a trailing "--") at the very
-// start and end, turns "--" into "-", ends the text with a period if it has no closing punctuation, and breaks up
+// start and end, adds a space after a period that is jammed against the next sentence, puts a blank line between lines, turns "--" and em dashes into "-", turns ". . ." into "...", ends the text with a period if it has no closing punctuation, and breaks up
 // huge paragraphs.
 export function cleanDescription(text: string): string {
-  const cleaned = tidyText(text.replace(/[ \t]*[-–—]*[ \t]*provided\s+by\s+(?:the\s+)?publisher\.?[ \t]*/gi, ''))
+  let cleaned = tidyText(text.replace(/[ \t]*[-–—]*[ \t]*provided\s+by\s+(?:the\s+)?publisher\.?[ \t]*/gi, ''))
     .replace(/^["“”]+\s*/, '')
     .replace(/\s*["“”]+[-–—]*\s*$/, '')
     .replace(/\s*-{2,}\s*$/, '')
     .replace(/-{2,}/g, '-')
+    // Sentences run together ("end.The next") get a space after the period, question mark or exclamation mark.
+    // A capital followed by a period ("Ph.D.", "J.R.") is an abbreviation, not a new sentence.
+    .replace(/(\.{3}|…|[\p{Ll}\d][.!?])(["”’)]?)(?=\p{Lu}(?!\.))/gu, '$1$2 ')
+    .replace(/([\p{Ll}\d][.!?])(?=[“‘]\p{Lu})/gu, '$1 ')
+    // Spaced-out dots (". . .") become a plain ellipsis, and an em dash becomes a single dash.
+    .replace(/\.(?: \.){2,}/g, '...')
+    .replace(/—/g, '-')
     .trim()
   if (!cleaned) return cleaned
+  // A single line break between lines becomes a blank line, so every line is its own spaced paragraph.
+  cleaned = cleaned.replace(/(?<!\n)\n(?!\n)/g, '\n\n')
   const ended = /[.!?…]["”’)]*$/.test(cleaned) ? cleaned : `${cleaned}.`
   return ended.split(/\n{2,}/).map(breakLongParagraph).join('\n\n')
 }

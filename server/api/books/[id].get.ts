@@ -1,3 +1,5 @@
+import sharp from 'sharp'
+
 // Detail page data: the book's current Square values plus the saved ISBNdb record, if any. Reads only local files.
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -21,6 +23,24 @@ export default defineEventHandler(async (event) => {
   const images = squareImages.map(image => image.url)
   const original = await readOriginalInfo(isbn)
 
+  // Pixel sizes of the images already in Square (read from the local copies, saved the first time they are needed).
+  const squareSizes = new Map<string, number>()
+  for (const image of squareImages) {
+    try {
+      const meta = await sharp(await loadSquareImage(image.id)).metadata()
+      squareSizes.set(image.id, Math.max(meta.width ?? 0, meta.height ?? 0))
+    } catch {
+      // Size unknown: this image is never replaced automatically.
+    }
+  }
+  // When the ISBNdb cover is clearly larger (15% or more on its longer side) than the biggest Square image, it is selected
+  // and that Square image is turned off, which means it will be deleted from Square when the update is sent.
+  // A book already updated by this app is left as it is: the image in Square is the one this app made.
+  const bigSquare = squareImages.filter(image => squareSizes.get(image.id)).sort((a, b) => squareSizes.get(b.id)! - squareSizes.get(a.id)!)[0]
+  const wasUpdated = (await readEdits())[item.id]?.wasUpdated === true
+  const replaceWithIsbndb = !!original && !wasUpdated && !!bigSquare
+    && Math.max(original.width, original.height) >= squareSizes.get(bigSquare.id)! * 1.15
+
   // Every image that could end up on the item. Existing Square images stay unless the owner turns them off;
   // the ISBNdb cover is only included by default when the item has no image yet.
   const imageCandidates = [
@@ -31,7 +51,7 @@ export default defineEventHandler(async (event) => {
       url: image.url,
       squareName: image.name ?? '',
       bytes: null as number | null,
-      defaultOn: true
+      defaultOn: !(replaceWithIsbndb && image.id === bigSquare?.id)
     })),
     ...(original
       ? [{
@@ -41,7 +61,7 @@ export default defineEventHandler(async (event) => {
           url: `/api/images/original/${isbn}`,
           squareName: '',
           bytes: original.bytes,
-          defaultOn: squareImages.length === 0
+          defaultOn: squareImages.length === 0 || replaceWithIsbndb
         }]
       : []),
     ...(await listUploaded(isbn)).map(upload => ({
@@ -97,6 +117,7 @@ export default defineEventHandler(async (event) => {
       title: mergedTitle,
       description: mergeDescription({
         series: mergedTitle.series,
+        bookOf: mergedTitle.bookOf,
         squareDescription: data.description_plaintext ?? data.description ?? '',
         isbndbDescription: isbndb.status === 'found' ? isbndb.description : null
       }),

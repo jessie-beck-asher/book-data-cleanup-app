@@ -172,7 +172,7 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
 
   // Names given to images in Square. An image already named "sprayed-edges" starts out marked.
   const sprayed = new Set(edit.sprayedEdges ?? currentImageIds.filter(id => looksSprayed(relatedById.get(id)?.image_data?.name)).map(id => `square:${id}`))
-  const nameForKey = (key: string) => imageNameFor(title, sprayed.has(key))
+  const nameForKey = (key: string) => imageNameFor(title, sprayed.has(key), edit.imageNameExtras?.[key])
   const renames: { imageId: string, name: string }[] = []
   const usedElsewhere = new Set<string>()
   for (const other of snapshot.items) {
@@ -267,7 +267,7 @@ export async function makePlan(itemId: string): Promise<UpdatePlan> {
   }
 
   const finalNames = [...finalByKey].filter(([, id]) => finalIds.includes(id)).map(([key]) => nameForKey(key))
-  if (new Set(finalNames).size !== finalNames.length) plan.blockers.push('Two images would get the same name. Mark one of them as the sprayed-edges image.')
+  if (new Set(finalNames).size !== finalNames.length) plan.blockers.push('Two images would get the same name. Mark one of them as the sprayed-edges image, or add words to one of the names.')
 
   const imagesChanged = imageLines.some(line => !line.startsWith('Keep'))
   plan.rows.push({ field: 'Images', before: list(currentImageIds), after: imageLines.join('\n') || '(none)', changed: imagesChanged })

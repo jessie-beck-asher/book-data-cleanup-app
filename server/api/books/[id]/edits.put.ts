@@ -19,6 +19,13 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  const imageNameExtras: Record<string, string> = {}
+  if (body && typeof body.imageNameExtras === 'object' && body.imageNameExtras) {
+    for (const [key, text] of Object.entries<any>(body.imageNameExtras)) {
+      if (isText(key, 200) && isText(text, 60) && text.trim()) imageNameExtras[key] = text.trim()
+    }
+  }
+
   if (!isText(body?.title, 1000) || !isText(body?.description, 100000) || !isTextList(body?.categories, 100)
     || typeof body?.changeVariation !== 'boolean' || !isTextList(body?.includedImages, 100)) {
     throw createError({ statusCode: 400, statusMessage: 'Bad edit values' })
@@ -32,6 +39,7 @@ export default defineEventHandler(async (event) => {
     includedImages: body.includedImages,
     primaryImage: isText(body.primaryImage, 200) ? body.primaryImage : null,
     sprayedEdges: isTextList(body.sprayedEdges, 100) ? body.sprayedEdges : [],
+    imageNameExtras,
     crops
   })
   return { savedAt: saved.savedAt }

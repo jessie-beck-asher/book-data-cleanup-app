@@ -18,6 +18,11 @@ const descriptionNeedsAttention = computed(() => {
   const merged = book.value?.merged.description
   return !!merged && merged.isbndbCheck === 'mismatch' && merged.looksCutOff && proposedDescription.value === merged.description
 })
+// Accepts the ISBNdb description when it was flagged as possibly another book; it has all the same clean-up rules applied.
+function useIsbndbDescription() {
+  const version = book.value?.merged.description.isbndbVersion
+  if (version) proposedDescription.value = version
+}
 function resetDescription() {
   proposedDescription.value = book.value?.merged.description.description ?? ''
 }
@@ -51,7 +56,12 @@ const sprayedEdges = ref<string[]>(saved?.sprayedEdges ?? (book.value?.imageCand
 function toggleSprayed(key: string) {
   sprayedEdges.value = sprayedEdges.value.includes(key) ? sprayedEdges.value.filter(entry => entry !== key) : [...sprayedEdges.value, key]
 }
-const imageNameOf = (key: string) => imageNameFor(proposedTitle.value, sprayedEdges.value.includes(key))
+// Words added to the end of an image's name, for a supporting image that is not sprayed (such as "back cover").
+const imageNameExtras = ref<Record<string, string>>({ ...(saved?.imageNameExtras ?? {}) })
+function setNameExtra(key: string, text: string) {
+  imageNameExtras.value = { ...imageNameExtras.value, [key]: text }
+}
+const imageNameOf = (key: string) => imageNameFor(proposedTitle.value, sprayedEdges.value.includes(key), imageNameExtras.value[key])
 const duplicateNames = computed(() => {
   const names = includedImages.value.map(imageNameOf)
   return new Set(names).size !== names.length
@@ -302,6 +312,7 @@ async function saveEdits() {
         includedImages: includedImages.value,
         primaryImage: primaryImage.value,
         sprayedEdges: sprayedEdges.value,
+        imageNameExtras: imageNameExtras.value,
         crops: crops.value
       }
     })
@@ -311,7 +322,7 @@ async function saveEdits() {
     saveStatus.value = 'failed'
   }
 }
-watch([proposedTitle, proposedDescription, selectedCategories, changeVariation, includedImages, primaryImage, sprayedEdges, crops], () => {
+watch([proposedTitle, proposedDescription, selectedCategories, changeVariation, includedImages, primaryImage, sprayedEdges, imageNameExtras, crops], () => {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(saveEdits, 600)
 }, { deep: true })
@@ -442,6 +453,14 @@ function formatBytes(bytes: number) {
             <p v-if="book.merged.description.isbndbCheck === 'mismatch'" class="warning">
               The ISBNdb description may be for a different book (outlined in red below).
             </p>
+            <button
+              v-if="book.merged.description.isbndbCheck === 'mismatch' && book.merged.description.isbndbVersion"
+              type="button"
+              :disabled="proposedDescription === book.merged.description.isbndbVersion"
+              @click="useIsbndbDescription"
+            >
+              {{ proposedDescription === book.merged.description.isbndbVersion ? 'Using the ISBNdb description' : 'Use the ISBNdb description instead' }}
+            </button>
             <p v-if="descriptionNeedsAttention" class="incomplete-note">
               Outlined in yellow: the Square text looks cut off and ISBNdb's does not match. Edit it to clear the outline.
             </p>
@@ -545,6 +564,16 @@ function formatBytes(bytes: number) {
                 >
                   Sprayed edges
                 </button>
+                <label class="name-extra">
+                  Add to name
+                  <input
+                    type="text"
+                    maxlength="60"
+                    placeholder="e.g. back cover"
+                    :value="imageNameExtras[image.key] ?? ''"
+                    @input="setNameExtra(image.key, ($event.target as HTMLInputElement).value)"
+                  >
+                </label>
               </template>
               <span v-if="includedImages.includes(image.key) && effectivePrimary === image.key" class="primary-badge">★ Primary (sent first)</span>
               <button v-else-if="includedImages.includes(image.key)" type="button" @click="primaryImage = image.key">Make primary</button>
@@ -612,7 +641,7 @@ function formatBytes(bytes: number) {
               </p>
               <p>Drag to move, scroll or use the slider to zoom. Zoom out past the middle to shrink the cover and add white around it. White shows where the cover does not fill the frame. Nothing is saved yet.</p>
             </div>
-            <p v-if="duplicateNames" class="warning">Two included images would get the same name. Mark one of them as Sprayed edges.</p>
+            <p v-if="duplicateNames" class="warning">Two included images would get the same name. Mark one of them as Sprayed edges, or use Add to name.</p>
             <p v-if="!includedImages.length" class="warning">No images are included, so the item would have none.</p>
             <ul>
               <li v-if="book.imageCandidates.some(image => image.source === 'square')">Existing Square images stay unless you turn them off.</li>
@@ -625,7 +654,7 @@ function formatBytes(bytes: number) {
         </div>
 
         <div class="review">
-          <button type="button" :disabled="planning || sending" @click="reviewChanges">
+          <button type="button" class="big-button review-button" :disabled="planning || sending" @click="reviewChanges">
             {{ planning ? 'Building review…' : 'Review changes' }}
           </button>
           <span class="review-hint">Shows exactly what would change. Nothing is sent until you press the update button.</span>
@@ -649,7 +678,7 @@ function formatBytes(bytes: number) {
               <li v-for="warning in plan.warnings" :key="warning" class="incomplete-note">{{ warning }}</li>
             </ul>
             <p v-if="!plan.writesEnabled" class="warning">Writing to production is off for this book, so the update button is off.</p>
-            <button type="button" class="send" :disabled="!plan.canSend || sending" @click="sendUpdate">
+            <button type="button" class="big-button send" :disabled="!plan.canSend || sending" @click="sendUpdate">
               {{ sending ? 'Updating…' : `Looks good, update this book in Square (${plan.environment})` }}
             </button>
           </div>
@@ -793,7 +822,14 @@ function formatBytes(bytes: number) {
 .plan-table .text { white-space: pre-wrap; word-break: break-word; }
 .plan-table tr.changed { background: #eef6ff; }
 .plan-table .tag.same { background: #eee; color: #555; }
-.send { margin-top: 0.75rem; font-weight: 600; padding: 0.5rem 1rem; }
+.name-extra { font-size: 0.85rem; margin-left: 0.5rem; }
+.name-extra input { margin-left: 0.4rem; width: 11rem; }
+.big-button { display: block; margin: 0 0 0.5rem; padding: 1rem 2rem; font-size: 1.2rem; font-weight: 700; color: #fff; border: 0; border-radius: 0.6rem; cursor: pointer; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2); }
+.big-button:disabled { background: #b8b8b8; color: #f4f4f4; cursor: not-allowed; box-shadow: none; }
+.review-button { background: #2f5fb3; }
+.review-button:hover:not(:disabled) { background: #244b8f; }
+.send { margin-top: 1rem; width: 100%; max-width: 40rem; background: #1f7a4a; }
+.send:hover:not(:disabled) { background: #176038; }
 .toast { position: fixed; right: 1.25rem; bottom: 1.25rem; max-width: 26rem; padding: 0.85rem 1.1rem; background: #1f7a4a; color: #fff; border-radius: 0.5rem; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); cursor: pointer; z-index: 50; }
 .toast ul { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; }
 .backup { margin: 0.5rem 0; }

@@ -11,27 +11,17 @@ function rememberScroll() {
     // Scroll position just won't be restored.
   }
 }
-// Remembered in a local file so it survives reloads; the box goes back if saving fails.
-async function setWeightDone(book: { id: string, weightDone: boolean }, done: boolean) {
-  const before = book.weightDone
-  book.weightDone = done
+// Copy an ISBN or weight to the clipboard, showing "Copied" on that button for a moment.
+const copiedKey = ref<string | null>(null)
+async function copyValue(key: string, text: string) {
   try {
-    await $fetch(`/api/books/${book.id}/weight-done`, { method: 'PUT', body: { done } })
-  } catch {
-    book.weightDone = before
-  }
-}
-// Copy an ISBN to the clipboard, showing "Copied" on that row's button for a moment.
-const copiedIsbn = ref<string | null>(null)
-async function copyIsbn(isbn: string) {
-  try {
-    await navigator.clipboard.writeText(isbn)
-    copiedIsbn.value = isbn
+    await navigator.clipboard.writeText(text)
+    copiedKey.value = key
     setTimeout(() => {
-      if (copiedIsbn.value === isbn) copiedIsbn.value = null
+      if (copiedKey.value === key) copiedKey.value = null
     }, 1500)
   } catch {
-    copiedIsbn.value = null
+    copiedKey.value = null
   }
 }
 const toast = ref<{ message: string, problems: string[] } | null>(null)
@@ -65,7 +55,7 @@ onMounted(() => {
       <p>{{ data.books.length }} books</p>
       <table class="book-table">
         <thead>
-          <tr><th>#</th><th>Title</th><th>Updated in Square</th><th>Shipping weight added</th></tr>
+          <tr><th>#</th><th>Title</th><th>Updated in Square</th><th>Shipping weight (lb)</th></tr>
         </thead>
         <tbody>
           <tr v-for="(book, index) in data.books" :key="book.id">
@@ -75,19 +65,19 @@ onMounted(() => {
                 <NuxtLink :to="`/books/${book.id}`" @click="rememberScroll">{{ book.title }}</NuxtLink>
                 <span v-if="book.archived" class="tag">archived</span>
                 <span class="isbn">{{ book.isbn }}</span>
-                <button type="button" class="copy" @click="copyIsbn(book.isbn)">
-                  {{ copiedIsbn === book.isbn ? 'Copied' : 'Copy' }}
+                <button type="button" class="copy" @click="copyValue(book.isbn, book.isbn)">
+                  {{ copiedKey === book.isbn ? 'Copied' : 'Copy' }}
                 </button>
               </div>
             </td>
             <td>{{ book.wasUpdated ? 'Yes' : 'No' }}</td>
             <td>
-              <input
-                type="checkbox"
-                :checked="book.weightDone"
-                :aria-label="`Shipping weight added for ${book.title}`"
-                @change="setWeightDone(book, ($event.target as HTMLInputElement).checked)"
-              >
+              <div v-if="book.weight !== null" class="title-cell">
+                <span>{{ book.weight }}</span>
+                <button type="button" class="copy" @click="copyValue(`w:${book.id}`, String(book.weight))">
+                  {{ copiedKey === `w:${book.id}` ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>

@@ -1,5 +1,5 @@
 // How images are named in Square: the book title without the author, with dashes between words, then "-book-cover",
-// plus "-sprayed-edges" for an image the owner marks as the sprayed-edges edition.
+// plus "-sprayed-edges" for an image the owner marks as the sprayed-edges edition, plus any words the owner adds.
 
 export function slugify(text: string) {
   return text
@@ -19,9 +19,11 @@ export function titleWithoutAuthor(title: string) {
   return head || title
 }
 
-export function imageNameFor(title: string, sprayedEdges: boolean) {
+// `extra` is words the owner adds for a supporting image (such as "back cover"); they go on the very end.
+export function imageNameFor(title: string, sprayedEdges: boolean, extra = '') {
   const base = slugify(titleWithoutAuthor(title)) || 'book'
-  return `${base}-book-cover${sprayedEdges ? '-sprayed-edges' : ''}`
+  const more = slugify(extra)
+  return `${base}-book-cover${sprayedEdges ? '-sprayed-edges' : ''}${more ? `-${more}` : ''}`
 }
 
 // The caption (Square shows it as the image's alt text) is the image name with spaces instead of dashes.

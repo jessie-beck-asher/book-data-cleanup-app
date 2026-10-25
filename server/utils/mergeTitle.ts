@@ -16,6 +16,8 @@ export interface MergedTitle {
   authors: string | null
   // A bracketed name in the title that is not an edition or a format, such as "(Wicked Villains)".
   series: string | null
+  // "Book 2 of the Nightborn Duet", when the title says "Book 2 of The Nightborn Duet" (or Volume / Part).
+  bookOf: string | null
   notes: string[]
 }
 
@@ -68,7 +70,7 @@ function findSeries(text: string | null | undefined): string | null {
   if (!text) return null
   for (const match of text.matchAll(/\(([^()]+)\)/g)) {
     const inner = match[1]!.trim()
-    if (new RegExp(EDITION_SOURCE, 'i').test(inner) || /\bedition\b/i.test(inner) || FORMAT_WORDS.test(inner)) continue
+    if (new RegExp(EDITION_SOURCE, 'i').test(inner) || /\bedition\b/i.test(inner) || FORMAT_WORDS.test(inner) || BOOK_OF.test(inner)) continue
     // "Wicked Villains, Book 2" and "Wicked Villains #2" both mean the series is "Wicked Villains".
     const name = inner.replace(/[,;:]?\s*(?:book|vol(?:ume)?\.?|part)?\s*#?\d+\s*$/i, '').replace(/\s+series$/i, '').trim()
     if (name && /\p{L}/u.test(name)) return name
@@ -76,11 +78,28 @@ function findSeries(text: string | null | undefined): string | null {
   return null
 }
 
+const NUMBER_WORDS = 'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve'
+const BOOK_OF = new RegExp(String.raw`\b(book|vol(?:ume)?\.?|part)\s+(\d+|${NUMBER_WORDS})\s+of\s+(?:the\s+)?(.+?)(?=\s+by\s+\p{Lu}|\s*[()]|\s*$)`, 'iu')
+function findBookOf(text: string | null | undefined): { line: string, series: string } | null {
+  const match = text ? BOOK_OF.exec(text) : null
+  if (!match) return null
+  const series = match[3]!.replace(/[\s.,;:\-–—]+$/, '').trim()
+  if (!series) return null
+  const label = match[1]!.replace(/^./, letter => letter.toUpperCase())
+  return { line: `${label} ${match[2]} of the ${series}`, series }
+}
+
 function removeEditions(text: string) {
   return text
     .replace(new RegExp(EDITION_SOURCE, 'gi'), ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[\s:,\-–—|]+|[\s:,\-–—|]+$/g, '')
+}
+
+// An author typed in capitals ("BROADBENT CARISSA") becomes "Broadbent Carissa". Names with lowercase letters are left as typed.
+function fixNameCase(name: string) {
+  if (!/\p{L}/u.test(name) || name !== name.toUpperCase()) return name
+  return name.toLowerCase().replace(/(^|[\s'’\-.])(\p{L})/gu, (_, before: string, letter: string) => before + letter.toUpperCase())
 }
 
 // ISBNdb gives "Last, First"; Square wants "First Last".
@@ -105,8 +124,21 @@ function splitTrailingAuthor(title: string): { base: string, author: string | nu
   return looksLikeName ? { base: title.slice(0, index), author: rest } : { base: title, author: null }
 }
 
-export function mergeTitle(input: MergeTitleInput): MergedTitle {
+// "(Romance author)" sometimes rides along on a title or author name; it is never wanted.
+const NEVER_WANTED = /\s*\(\s*romance\s+authors?\s*\)/gi
+const dropUnwanted = (text: string | null | undefined) => text?.replace(NEVER_WANTED, '').trim() ?? text
+
+export function mergeTitle(rawInput: MergeTitleInput): MergedTitle {
   const notes: string[] = []
+  const input: MergeTitleInput = {
+    ...rawInput,
+    squareTitle: dropUnwanted(rawInput.squareTitle) ?? '',
+    isbndb: rawInput.isbndb ? {
+      ...rawInput.isbndb,
+      title: dropUnwanted(rawInput.isbndb.title),
+      authors: rawInput.isbndb.authors?.map(name => dropUnwanted(name) ?? name)
+    } : null
+  }
   const isbndb = input.isbndb ?? null
 
   const editionSources: [string, string | null | undefined][] = [
@@ -126,7 +158,7 @@ export function mergeTitle(input: MergeTitleInput): MergedTitle {
 
   let rawBase: string
   let author: string | null = null
-  const isbndbAuthors = (isbndb?.authors ?? []).map(flipName).filter(Boolean)
+  const isbndbAuthors = (isbndb?.authors ?? []).map(flipName).map(fixNameCase).filter(Boolean)
 
   if (isbndb?.title) {
     rawBase = isbndb.title
@@ -144,6 +176,7 @@ export function mergeTitle(input: MergeTitleInput): MergedTitle {
     rawBase = split.base
     // The Square title is the fallback source for the author even when the base title came from ISBNdb.
     author = split.author ?? splitTrailingAuthor(input.squareTitle).author
+    if (author) author = fixNameCase(author)
     notes.push(author ? 'No ISBNdb author, so the author was taken from the end of the Square title.' : 'No author found.')
   }
 
@@ -155,7 +188,10 @@ export function mergeTitle(input: MergeTitleInput): MergedTitle {
   const series = findSeries(input.squareTitle) ?? findSeries(isbndb?.title)
   if (series) notes.push(`A series, "${series}", was found in brackets in the title.`)
 
+  const bookOf = findBookOf(input.squareTitle) ?? findBookOf(isbndb?.title)
+  if (bookOf) notes.push(`"${bookOf.line}" was found in the title.`)
+
   const base = titleCase(removeEditions(rawBase))
   const title = [base, edition ? `(${edition})` : null, author ? `by ${author}` : null, format ? `(${format})` : null].filter(Boolean).join(' ')
-  return { title, base, edition, format, authors: author, series, notes }
+  return { title, base, edition, format, authors: author, series, bookOf: bookOf?.line ?? null, notes }
 }

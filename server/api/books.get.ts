@@ -6,6 +6,7 @@ export default defineEventHandler(async () => {
 
   const edits = await readEdits()
   const isbndbStore = await readIsbndbStore()
+  const listed = await readCategoryWeight()
   const books = snapshot.items
     .filter(item => getItemIsbns(item).size === 1)
     .map(item => ({
@@ -15,8 +16,9 @@ export default defineEventHandler(async () => {
       archived: item.item_data?.is_archived === true,
       // Becomes true only once Square confirms an update; nothing writes to Square yet.
       wasUpdated: edits[item.id]?.wasUpdated === true,
-      // Shipping weight in pounds from the saved ISBNdb record, or null when ISBNdb has none.
-      weight: weightInPounds(isbndbStore[[...getItemIsbns(item)][0]!]?.book?.dimensions_structured)?.pounds ?? null
+      // Shipping weight in pounds from the saved ISBNdb record, else from the owner's own list, else null.
+      weight: weightInPounds(isbndbStore[[...getItemIsbns(item)][0]!]?.book?.dimensions_structured)?.pounds
+        ?? listed[[...getItemIsbns(item)][0]!]?.weight ?? null
     }))
     .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true }))
 

@@ -96,6 +96,8 @@ export default defineEventHandler(async (event) => {
           dimensions: book.dimensions_structured ?? null
         }
 
+  const listed = (await readCategoryWeight())[isbn] ?? null
+
   const mergedTitle = mergeTitle({
     squareTitle: data.name ?? '',
     squareDescription: data.description_plaintext ?? data.description ?? '',
@@ -124,9 +126,12 @@ export default defineEventHandler(async (event) => {
       variation: mergeVariation(data),
       categories: mergeCategories({
         squareCategories: categories as string[],
-        isbndbSubjects: isbndb.status === 'found' ? isbndb.subjects : []
+        isbndbSubjects: isbndb.status === 'found' ? isbndb.subjects : [],
+        listedCategories: listed?.category ?? []
       })
     },
+    // Weight (pounds) from the owner's own list; used when ISBNdb has none.
+    listedWeight: listed?.weight ?? null,
     imageCandidates,
     saved: (await readEdits())[item.id] ?? null,
     // The item exactly as Square returned it, plus the category and image objects it points to.

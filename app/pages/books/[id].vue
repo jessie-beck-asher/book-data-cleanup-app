@@ -12,6 +12,8 @@ function resetTitle() {
 }
 
 const isbndbWeight = computed(() => weightInPounds(book.value?.isbndb.dimensions))
+// ISBNdb's weight first, then the one from the owner's own list.
+const shippingWeight = computed(() => isbndbWeight.value?.pounds ?? book.value?.listedWeight ?? null)
 const proposedDescription = ref(saved?.description ?? book.value?.merged.description.description ?? '')
 // Red outline stays until the description is edited: Square's text is cut off and ISBNdb's looks like another book.
 const descriptionNeedsAttention = computed(() => {
@@ -350,6 +352,23 @@ async function reviewChanges() {
     planning.value = false
   }
 }
+// The review is shown as soon as the page opens, built from the edits already saved (nothing is saved or sent by this).
+// A book with nothing saved yet gets its proposed values saved first (same as pressing the button), since the diff is built from saved edits.
+onMounted(async () => {
+  if (!book.value) return
+  if (saved) {
+    planning.value = true
+    try {
+      plan.value = await $fetch<PlanResult>(`/api/books/${book.value.id}/plan`, { method: 'POST' })
+    } catch {
+      // The button shows the error if it happens again.
+    } finally {
+      planning.value = false
+    }
+  } else {
+    await reviewChanges()
+  }
+})
 async function sendUpdate() {
   if (!book.value || !plan.value) return
   reviewError.value = ''
@@ -657,7 +676,7 @@ function formatBytes(bytes: number) {
           <button type="button" class="big-button review-button" :disabled="planning || sending" @click="reviewChanges">
             {{ planning ? 'Building review…' : 'Review changes' }}
           </button>
-          <span class="review-hint">Shows exactly what would change. Nothing is sent until you press the update button.</span>
+          <span class="review-hint">Shows exactly what would change. It opens with the page; press this again after you change anything. Nothing is sent until you press the update button.</span>
           <p v-if="reviewError" class="warning">{{ reviewError }}</p>
 
           <div v-if="plan" class="plan">
@@ -678,9 +697,17 @@ function formatBytes(bytes: number) {
               <li v-for="warning in plan.warnings" :key="warning" class="incomplete-note">{{ warning }}</li>
             </ul>
             <p v-if="!plan.writesEnabled" class="warning">Writing to production is off for this book, so the update button is off.</p>
-            <button type="button" class="big-button send" :disabled="!plan.canSend || sending" @click="sendUpdate">
-              {{ sending ? 'Updating…' : `Looks good, update this book in Square (${plan.environment})` }}
-            </button>
+            <div class="send-row">
+              <button type="button" class="big-button send" :disabled="!plan.canSend || sending" @click="sendUpdate">
+                {{ sending ? 'Updating…' : `Looks good, update this book in Square (${plan.environment})` }}
+              </button>
+              <div v-if="shippingWeight" class="send-weight">
+                <span>{{ shippingWeight }} lb</span>
+                <button type="button" class="copy-weight" @click="copyText('weight', String(shippingWeight))">
+                  {{ copied === 'weight' ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -741,12 +768,11 @@ function formatBytes(bytes: number) {
             <th>Shipping weight</th>
             <td>Not available through Square's API</td>
             <td>
-              <template v-if="book.isbndb.status === 'found'">
-                <template v-if="isbndbWeight">
-                  {{ isbndbWeight.pounds }} lb<small v-if="isbndbWeight.from"> (converted from {{ isbndbWeight.from }})</small>
-                </template>
-                <template v-else>Not provided by ISBNdb</template>
+              <template v-if="isbndbWeight">
+                {{ isbndbWeight.pounds }} lb<small v-if="isbndbWeight.from"> (converted from {{ isbndbWeight.from }})</small>
               </template>
+              <template v-else-if="book.listedWeight">{{ book.listedWeight }} lb<small> (from your own list)</small></template>
+              <template v-else-if="book.isbndb.status === 'found'">Not provided by ISBNdb</template>
               <template v-else>—</template>
             </td>
           </tr>
@@ -828,7 +854,11 @@ function formatBytes(bytes: number) {
 .big-button:disabled { background: #b8b8b8; color: #f4f4f4; cursor: not-allowed; box-shadow: none; }
 .review-button { background: #2f5fb3; }
 .review-button:hover:not(:disabled) { background: #244b8f; }
-.send { margin-top: 1rem; width: 100%; max-width: 40rem; background: #1f7a4a; }
+.send-row { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
+.send-row .send { margin: 0; flex: 0 1 40rem; }
+.send-weight { display: flex; align-items: center; gap: 0.5rem; font-size: 1.2rem; font-weight: 700; white-space: nowrap; }
+.copy-weight { margin: 0; padding: 0.4rem 0.9rem; font-size: 1rem; }
+.send { background: #1f7a4a; }
 .send:hover:not(:disabled) { background: #176038; }
 .toast { position: fixed; right: 1.25rem; bottom: 1.25rem; max-width: 26rem; padding: 0.85rem 1.1rem; background: #1f7a4a; color: #fff; border-radius: 0.5rem; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); cursor: pointer; z-index: 50; }
 .toast ul { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; }

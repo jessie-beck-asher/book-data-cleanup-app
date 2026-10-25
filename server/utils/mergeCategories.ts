@@ -23,7 +23,7 @@ export interface MergedCategories {
   notes: string[]
 }
 
-export function mergeCategories(input: { squareCategories: string[], isbndbSubjects: string[] }): MergedCategories {
+export function mergeCategories(input: { squareCategories: string[], isbndbSubjects: string[], listedCategories?: string[] }): MergedCategories {
   const notes: string[] = []
   const selected = new Set<string>([BOOKS_CATEGORY])
   const suggested: string[] = []
@@ -51,6 +51,14 @@ export function mergeCategories(input: { squareCategories: string[], isbndbSubje
       ? `No genre in Square. Suggested from ISBNdb subjects: ${suggested.join(', ')}.`
       : 'No genre in Square, and the ISBNdb subjects did not point to one. Pick one if it fits.')
   }
+
+  // Last step: genres from the owner's own list are added on top of whatever was chosen above.
+  const fromList = GENRE_CATEGORIES.filter(genre => input.listedCategories?.includes(genre) && !selected.has(genre))
+  for (const genre of fromList) {
+    selected.add(genre)
+    suggested.push(genre)
+  }
+  if (fromList.length) notes.push(`Added from your own category list: ${fromList.join(', ')}.`)
 
   if (!input.squareCategories.includes(BOOKS_CATEGORY)) notes.push('Added "Books", which every book with an ISBN should have.')
   return { selected: [BOOKS_CATEGORY, ...GENRE_CATEGORIES.filter(genre => selected.has(genre))], suggested, notes }

@@ -48,7 +48,7 @@ export function overlapWithSquare(squareText: string, isbndbText: string): numbe
   return shared / squareShingles.size
 }
 
-function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescription: string | null }): MergedDescription {
+function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescription: string | null, series?: string | null }): MergedDescription {
   const notes: string[] = []
   const square = stripPublisherTag(input.squareDescription ?? '')
   const isbndbText = input.isbndbDescription ? tidyText(input.isbndbDescription) : ''
@@ -87,7 +87,14 @@ function mergeDescriptionRaw(input: { squareDescription: string, isbndbDescripti
 }
 
 // The proposal never starts or ends with quote marks and has no "--" (see cleanDescription).
-export function mergeDescription(input: { squareDescription: string, isbndbDescription: string | null }): MergedDescription {
+export function mergeDescription(input: { squareDescription: string, isbndbDescription: string | null, series?: string | null }): MergedDescription {
   const merged = mergeDescriptionRaw(input)
-  return { ...merged, description: cleanDescription(merged.description) }
+  let description = cleanDescription(merged.description)
+  const notes = [...merged.notes]
+  // A series found in the title goes on a line of its own at the top.
+  if (input.series && description && !/^part of the /i.test(description)) {
+    description = `Part of the ${input.series} series\n\n${description}`
+    notes.push(`Added "Part of the ${input.series} series" at the top.`)
+  }
+  return { ...merged, description, notes }
 }

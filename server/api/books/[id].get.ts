@@ -76,6 +76,12 @@ export default defineEventHandler(async (event) => {
           dimensions: book.dimensions_structured ?? null
         }
 
+  const mergedTitle = mergeTitle({
+    squareTitle: data.name ?? '',
+    squareDescription: data.description_plaintext ?? data.description ?? '',
+    isbndb: book ? { title: book.title, synopsis: book.synopsis, authors: book.authors, binding: book.binding } : null
+  })
+
   return {
     id: item.id as string,
     isbn,
@@ -88,12 +94,9 @@ export default defineEventHandler(async (event) => {
     },
     isbndb,
     merged: {
-      title: mergeTitle({
-        squareTitle: data.name ?? '',
-        squareDescription: data.description_plaintext ?? data.description ?? '',
-        isbndb: book ? { title: book.title, synopsis: book.synopsis, authors: book.authors, binding: book.binding } : null
-      }),
+      title: mergedTitle,
       description: mergeDescription({
+        series: mergedTitle.series,
         squareDescription: data.description_plaintext ?? data.description ?? '',
         isbndbDescription: isbndb.status === 'found' ? isbndb.description : null
       }),

@@ -26,9 +26,11 @@ export function tidyText(text: string): string {
     .trim()
 }
 
-// For descriptions going to Square: drops quote marks (and a trailing "--") at the very start and end, and turns "--" into "-".
+// For descriptions going to Square: drops "- Provided by publisher." wherever it appears (ISBNdb usually has it right after
+// the closing quote, like `...ablaze?"-- Provided by publisher.`), drops quote marks (and a trailing "--") at the very
+// start and end, and turns "--" into "-".
 export function cleanDescription(text: string): string {
-  return tidyText(text)
+  return tidyText(text.replace(/[ \t]*[-–—]*[ \t]*provided\s+by\s+(?:the\s+)?publisher\.?[ \t]*/gi, ''))
     .replace(/^["“”]+\s*/, '')
     .replace(/\s*["“”]+[-–—]*\s*$/, '')
     .replace(/\s*-{2,}\s*$/, '')

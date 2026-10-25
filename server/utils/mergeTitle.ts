@@ -14,6 +14,8 @@ export interface MergedTitle {
   edition: string | null
   format: string | null
   authors: string | null
+  // A bracketed name in the title that is not an edition or a format, such as "(Wicked Villains)".
+  series: string | null
   notes: string[]
 }
 
@@ -56,7 +58,21 @@ function findEdition(text: string | null | undefined): string | null {
 function bindingToFormat(binding: string | null | undefined): string | null {
   if (!binding) return null
   if (/paperback|softcover|soft cover|trade paper/i.test(binding)) return 'Paperback'
-  if (/hardcover|hard cover|hardback|hardbound/i.test(binding)) return 'Hardback'
+  if (/hardcover|hard cover|hardback|hardbound/i.test(binding)) return 'Hardcover'
+  return null
+}
+
+// Brackets in a title that name neither an edition nor a format are taken to be the series.
+const FORMAT_WORDS = /^(?:paperback|hardcover|hardback|hardbound|softcover|soft cover|mass market(?: paperback)?|trade paperback|large print|board book)$/i
+function findSeries(text: string | null | undefined): string | null {
+  if (!text) return null
+  for (const match of text.matchAll(/\(([^()]+)\)/g)) {
+    const inner = match[1]!.trim()
+    if (new RegExp(EDITION_SOURCE, 'i').test(inner) || /\bedition\b/i.test(inner) || FORMAT_WORDS.test(inner)) continue
+    // "Wicked Villains, Book 2" and "Wicked Villains #2" both mean the series is "Wicked Villains".
+    const name = inner.replace(/[,;:]?\s*(?:book|vol(?:ume)?\.?|part)?\s*#?\d+\s*$/i, '').replace(/\s+series$/i, '').trim()
+    if (name && /\p{L}/u.test(name)) return name
+  }
   return null
 }
 
@@ -133,10 +149,13 @@ export function mergeTitle(input: MergeTitleInput): MergedTitle {
 
   const format = bindingToFormat(isbndb?.binding)
   if (format) notes.push(`Format "${format}" from the ISBNdb binding "${isbndb?.binding}".`)
-  else if (isbndb?.binding) notes.push(`ISBNdb binding "${isbndb.binding}" is not Paperback or Hardback, so no format was added.`)
+  else if (isbndb?.binding) notes.push(`ISBNdb binding "${isbndb.binding}" is not Paperback or Hardcover, so no format was added.`)
   else notes.push('ISBNdb has no binding for this book, so no format was added.')
+
+  const series = findSeries(input.squareTitle) ?? findSeries(isbndb?.title)
+  if (series) notes.push(`A series, "${series}", was found in brackets in the title.`)
 
   const base = titleCase(removeEditions(rawBase))
   const title = [base, edition ? `(${edition})` : null, author ? `by ${author}` : null, format ? `(${format})` : null].filter(Boolean).join(' ')
-  return { title, base, edition, format, authors: author, notes }
+  return { title, base, edition, format, authors: author, series, notes }
 }

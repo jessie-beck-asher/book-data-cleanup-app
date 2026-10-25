@@ -32,6 +32,8 @@ button { margin-right: 0.5rem; }
 .error { color: #b00020; }
 .raw { max-height: 32rem; overflow: auto; background: #f6f6f6; padding: 0.75rem; font-size: 0.8rem; }
 .book-table { border-collapse: collapse; }
-.book-table th, .book-table td { text-align: left; padding: 0.25rem 1.5rem 0.25rem 0; }
+.book-table th, .book-table td { text-align: left; padding: 0.4rem 1.5rem 0.4rem 0.5rem; border-bottom: 1px solid #ddd; }
+.book-table th { border-bottom-color: #999; }
+.book-table tbody tr:hover { background: #f3f7fb; }
 .tag { font-size: 0.8rem; color: #666; margin-left: 0.5rem; }
 </style>

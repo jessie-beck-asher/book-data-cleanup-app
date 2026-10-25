@@ -562,9 +562,12 @@ function formatBytes(bytes: number) {
           </div>
           <div class="reasons">
             <div class="optimize">
-              <strong>Files that will be uploaded</strong>
-              <span v-if="optimizing" class="review-hint">Making previews…</span>
-              <span v-else-if="allOptimized" class="ok">These are the exact files that would be uploaded.</span>
+              <div class="optimize-head">
+                <strong>Files that will be uploaded</strong>
+                <!-- The status always takes the same room, so changing a crop never moves the boxes below it. -->
+                <span v-if="optimizing" class="review-hint">Making previews…</span>
+                <span v-else-if="allOptimized" class="ok">These are the exact files that would be uploaded.</span>
+              </div>
               <p v-if="includedCandidates.length && !uploadCandidates.length" class="review-hint">No new file is needed: the included images are already in Square and are kept as they are.</p>
               <p v-if="optimizeError" class="warning">{{ optimizeError }}</p>
               <div v-for="image in uploadCandidates.filter(candidate => optimized[candidate.key])" :key="image.key" class="optimized-item">
@@ -572,7 +575,7 @@ function formatBytes(bytes: number) {
                 <div>
                   <strong>{{ image.label }}</strong>
                   <div>{{ optimized[image.key]!.width }}×{{ optimized[image.key]!.height }} · {{ formatBytes(optimized[image.key]!.bytes) }} · JPEG quality {{ optimized[image.key]!.quality }}</div>
-                  <div v-if="isStale(image.key)" class="stale">Out of date: the crop changed. Updating the preview…</div>
+                  <div class="stale" :class="{ invisible: !isStale(image.key) }">Out of date: the crop changed. Updating the preview…</div>
                   <div v-for="warning in optimized[image.key]!.warnings" :key="warning" class="warning">{{ warning }}</div>
                 </div>
               </div>
@@ -818,6 +821,8 @@ function formatBytes(bytes: number) {
 .image-add { align-self: center; }
 .upload-label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; }
 .optimize { margin-bottom: 0.75rem; }
+.optimize-head { min-height: 1.6rem; }
+.invisible { visibility: hidden; }
 .optimize .ok { margin-left: 0.5rem; color: #1f6f43; font-weight: 600; }
 .optimized-item { display: flex; gap: 0.75rem; margin-top: 0.5rem; align-items: flex-start; }
 .optimized-item img { width: 6rem; height: 6rem; object-fit: contain; border: 1px solid #ddd; background: #fff; }

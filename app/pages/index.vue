@@ -65,10 +65,11 @@ onMounted(() => {
       <p>{{ data.books.length }} books</p>
       <table class="book-table">
         <thead>
-          <tr><th>Title</th><th>Updated in Square</th><th>Shipping weight added</th></tr>
+          <tr><th>#</th><th>Title</th><th>Updated in Square</th><th>Shipping weight added</th></tr>
         </thead>
         <tbody>
-          <tr v-for="book in data.books" :key="book.id">
+          <tr v-for="(book, index) in data.books" :key="book.id">
+            <td class="row-number">{{ index + 1 }} / {{ data.books.length }}</td>
             <td>
               <div class="title-cell">
                 <NuxtLink :to="`/books/${book.id}`" @click="rememberScroll">{{ book.title }}</NuxtLink>
@@ -99,6 +100,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.row-number { color: #666; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .title-cell { display: flex; align-items: center; gap: 0.5rem; }
 .title-cell .tag, .title-cell .isbn, .title-cell .copy { flex: none; margin: 0; }
 .isbn { color: #555; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }

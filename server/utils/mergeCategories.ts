@@ -2,7 +2,7 @@
 
 export const BOOKS_CATEGORY = 'Books'
 // The genre categories the owner files books under, in the order the pills are shown.
-export const GENRE_CATEGORIES = ['Small Town/Cowboy', 'Romantasy', 'Contemporary', 'Dark Romance', 'Young Adult', 'Sports'] as const
+export const GENRE_CATEGORIES = ['Small Town/Cowboy', 'Romantasy', 'Contemporary', 'Dark Romance', 'Young Adult', 'Sports', 'Historical'] as const
 
 // ISBNdb subjects that point to a genre. Matched as lowercase text inside a subject.
 const SUBJECT_HINTS: Record<(typeof GENRE_CATEGORIES)[number], string[]> = {
@@ -11,7 +11,8 @@ const SUBJECT_HINTS: Record<(typeof GENRE_CATEGORIES)[number], string[]> = {
   'Contemporary': ['contemporary'],
   'Dark Romance': ['dark romance', 'mafia', 'dark fiction'],
   'Young Adult': ['young adult', 'juvenile', 'teen'],
-  'Sports': ['sports', 'hockey', 'football', 'baseball', 'basketball']
+  'Sports': ['sports', 'hockey', 'football', 'baseball', 'basketball'],
+  'Historical': []
 }
 
 export interface MergedCategories {

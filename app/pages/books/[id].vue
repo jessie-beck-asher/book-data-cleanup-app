@@ -327,6 +327,10 @@ async function saveEdits() {
 watch([proposedTitle, proposedDescription, selectedCategories, changeVariation, includedImages, primaryImage, sprayedEdges, imageNameExtras, crops], () => {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(saveEdits, 600)
+  // The review table is rebuilt a moment after the last change, so it does not need the button pressed each time.
+  planStale.value = true
+  clearTimeout(planTimer)
+  planTimer = setTimeout(reviewChanges, 1800)
 }, { deep: true })
 
 // Review and update. Review only builds the diff; the update button sends this one book to Square (sandbox only for now).
@@ -335,8 +339,15 @@ const plan = ref<PlanResult | null>(null)
 const planning = ref(false)
 const sending = ref(false)
 const reviewError = ref('')
+// True from the moment something is changed until a review built after that change has arrived. The update button stays off meanwhile.
+const planStale = ref(false)
+let planTimer: ReturnType<typeof setTimeout> | undefined
+let planRun = 0
 async function reviewChanges() {
   if (!book.value) return
+  clearTimeout(planTimer)
+  const run = ++planRun
+  planStale.value = false
   reviewError.value = ''
   planning.value = true
   try {
@@ -344,18 +355,30 @@ async function reviewChanges() {
     clearTimeout(optimizeTimer)
     await saveEdits()
     await optimizeIncluded()
-    plan.value = await $fetch<PlanResult>(`/api/books/${book.value.id}/plan`, { method: 'POST' })
+    const built = await $fetch<PlanResult>(`/api/books/${book.value.id}/plan`, { method: 'POST' })
+    // A newer review was started while this one was running; only the newest one is shown.
+    if (run === planRun) plan.value = built
   } catch (err) {
-    plan.value = null
-    reviewError.value = (err as { statusMessage?: string }).statusMessage || 'Could not build the review'
+    if (run === planRun) {
+      plan.value = null
+      reviewError.value = (err as { statusMessage?: string }).statusMessage || 'Could not build the review'
+    }
   } finally {
-    planning.value = false
+    if (run === planRun) planning.value = false
   }
 }
+onBeforeUnmount(() => clearTimeout(planTimer))
 // The review is shown as soon as the page opens, built from the edits already saved (nothing is saved or sent by this).
 // A book with nothing saved yet gets its proposed values saved first (same as pressing the button), since the diff is built from saved edits.
 onMounted(async () => {
   if (!book.value) return
+  // If Square has a newer version of this item than the local copy, pull just this item (a read) and reload before anything is built from old data.
+  try {
+    const { pulled } = await $fetch<{ pulled: boolean }>(`/api/books/${book.value.id}/pull`, { method: 'POST', body: { onlyIfChanged: true } })
+    if (pulled) return afterWrite('This book had changed in Square, so its latest version was pulled automatically.', [])
+  } catch {
+    // Offline or Square unreachable: carry on with the local copy; the review will still stop an update if it is out of date.
+  }
   if (saved) {
     planning.value = true
     try {
@@ -424,6 +447,7 @@ function formatBytes(bytes: number) {
         {{ book.square.title || '(untitled)' }}
         <span v-if="book.archived" class="tag">archived</span>
         <small>ISBN {{ book.isbn }}</small>
+        <button type="button" class="copy-isbn" @click="copyText('isbn', book.isbn)">{{ copied === 'isbn' ? 'Copied' : 'Copy' }}</button>
       </h1>
       <p>
         <button type="button" :disabled="pulling" @click="pullThisBook">{{ pulling ? 'Pulling…' : 'Pull this book from Square' }}</button>
@@ -698,9 +722,10 @@ function formatBytes(bytes: number) {
             </ul>
             <p v-if="!plan.writesEnabled" class="warning">Writing to production is off for this book, so the update button is off.</p>
             <div class="send-row">
-              <button type="button" class="big-button send" :disabled="!plan.canSend || sending" @click="sendUpdate">
+              <button type="button" class="big-button send" :disabled="!plan.canSend || sending || planning || planStale" @click="sendUpdate">
                 {{ sending ? 'Updating…' : `Looks good, update this book in Square (${plan.environment})` }}
               </button>
+              <span v-if="planStale || planning" class="review-hint">Refreshing the review…</span>
               <div v-if="shippingWeight" class="send-weight">
                 <span>{{ shippingWeight }} lb</span>
                 <button type="button" class="copy-weight" @click="copyText('weight', String(shippingWeight))">
@@ -857,6 +882,7 @@ function formatBytes(bytes: number) {
 .send-row { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
 .send-row .send { margin: 0; flex: 0 1 40rem; }
 .send-weight { display: flex; align-items: center; gap: 0.5rem; font-size: 1.2rem; font-weight: 700; white-space: nowrap; }
+.copy-isbn { margin: 0 0 0 0.5rem; padding: 0.2rem 0.7rem; font-size: 0.9rem; font-weight: normal; vertical-align: middle; }
 .copy-weight { margin: 0; padding: 0.4rem 0.9rem; font-size: 1rem; }
 .send { background: #1f7a4a; }
 .send:hover:not(:disabled) { background: #176038; }

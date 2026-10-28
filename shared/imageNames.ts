@@ -31,3 +31,15 @@ export const imageCaptionFor = (name: string) => name.replace(/-/g, ' ')
 
 // A Square image already named with "sprayed-edges" starts out marked.
 export const looksSprayed = (name: string | undefined) => /sprayed/i.test(name ?? '')
+
+// The reverse of imageNameFor: reads the sprayed-edges mark and the added words back out of a name already in Square.
+// Returns null when the name does not start with this title's usual "title-book-cover".
+export function parseImageName(name: string | undefined, title: string): { sprayedEdges: boolean, extra: string } | null {
+  const prefix = `${slugify(titleWithoutAuthor(title)) || 'book'}-book-cover`
+  if (!name || !name.startsWith(prefix)) return null
+  let rest = name.slice(prefix.length)
+  if (rest && !rest.startsWith('-')) return null
+  const sprayedEdges = rest.startsWith('-sprayed-edges')
+  if (sprayedEdges) rest = rest.slice('-sprayed-edges'.length)
+  return { sprayedEdges, extra: rest.replace(/^-+/, '').replace(/-/g, ' ') }
+}

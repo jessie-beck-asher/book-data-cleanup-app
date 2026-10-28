@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const { data } = await useFetch('/api/books')
+const { data, refresh } = await useFetch('/api/books')
 
 // Clicking into a book remembers how far down the list was; after an update the book page sends you back here.
 const SCROLL_KEY = 'dashboard-scroll'
@@ -24,8 +24,28 @@ async function copyValue(key: string, text: string) {
     copiedKey.value = null
   }
 }
+// "Where I left off" is where the Updated column turns from Yes to a steady run of No: the first spot with 3 No's in a row.
+// A single book skipped on the way down does not count.
+const RESUME_RUN = 3
+const resumeIndex = computed(() => {
+  const books = data.value?.books ?? []
+  return books.findIndex((_, index) => books.slice(index, index + RESUME_RUN).length === RESUME_RUN && books.slice(index, index + RESUME_RUN).every(book => !book.wasUpdated))
+})
+const flashRow = ref<number | null>(null)
+function goToResume() {
+  const index = resumeIndex.value
+  if (index < 0) return
+  document.getElementById(`book-row-${index}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  flashRow.value = index
+  setTimeout(() => { if (flashRow.value === index) flashRow.value = null }, 2500)
+}
+function goToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 const toast = ref<{ message: string, problems: string[] } | null>(null)
 onMounted(() => {
+  // Coming back to the dashboard from inside the app reuses the earlier list; read it again so "Where I left off" and the Yes/No column are current.
+  void refresh()
   try {
     const waiting = sessionStorage.getItem(TOAST_KEY)
     if (waiting) {
@@ -58,7 +78,7 @@ onMounted(() => {
           <tr><th>#</th><th>Title</th><th>Updated in Square</th><th>Shipping weight (lb)</th></tr>
         </thead>
         <tbody>
-          <tr v-for="(book, index) in data.books" :key="book.id">
+          <tr v-for="(book, index) in data.books" :id="`book-row-${index}`" :key="book.id" :class="{ flash: flashRow === index }">
             <td class="row-number">{{ index + 1 }} / {{ data.books.length }}</td>
             <td>
               <div class="title-cell">
@@ -83,6 +103,10 @@ onMounted(() => {
         </tbody>
       </table>
     </template>
+    <div v-for="place in ['top', 'bottom']" :key="place" :class="['jump', place]">
+      <button type="button" title="Go to the first book that is not updated yet" @click="goToResume">&darr; Where I left off</button>
+      <button type="button" title="Go to the top of the list" @click="goToTop">&uarr; Back to top</button>
+    </div>
     <div v-if="toast" class="toast" role="status" @click="toast = null">
       <strong>{{ toast.message }}</strong>
     </div>
@@ -95,5 +119,12 @@ onMounted(() => {
 .title-cell .tag, .title-cell .isbn, .title-cell .copy { flex: none; margin: 0; }
 .isbn { color: #555; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }
 .copy { font-size: 0.8rem; padding: 0.1rem 0.5rem; }
-.toast { position: fixed; right: 1.25rem; bottom: 1.25rem; max-width: 26rem; padding: 0.85rem 1.1rem; background: #1f7a4a; color: #fff; border-radius: 0.5rem; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); cursor: pointer; z-index: 50; }
+.toast { position: fixed; left: 1.25rem; bottom: 1.25rem; max-width: 26rem; padding: 0.85rem 1.1rem; background: #1f7a4a; color: #fff; border-radius: 0.5rem; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); cursor: pointer; z-index: 50; }
+.jump { position: fixed; right: 1rem; z-index: 40; display: flex; gap: 0.5rem; }
+.jump.top { top: 3.5rem; }
+.jump.bottom { bottom: 1rem; }
+.jump button { margin: 0; padding: 0.55rem 0.9rem; font-size: 0.95rem; font-weight: 600; color: #fff; background: #2f5fb3; border: 0; border-radius: 999px; cursor: pointer; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25); }
+.jump button:hover { background: #244b8f; }
+.flash { animation: flash-row 2.5s ease-out; }
+@keyframes flash-row { 0%, 40% { background: #fff3b0; } 100% { background: transparent; } }
 </style>

@@ -1,5 +1,15 @@
 import sharp from 'sharp'
 
+// A book updated before saved image choices were re-pointed after an update gets that fixed the first time it is opened.
+async function savedEditFor(itemId: string) {
+  let edit = (await readEdits())[itemId]
+  if (edit?.wasUpdated && !edit.imagesSynced) {
+    await syncSavedImages(itemId, { onlyIfStale: true })
+    edit = (await readEdits())[itemId]
+  }
+  return edit ?? null
+}
+
 // Detail page data: the book's current Square values plus the saved ISBNdb record, if any. Reads only local files.
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -97,6 +107,8 @@ export default defineEventHandler(async (event) => {
         }
 
   const listed = (await readCategoryWeight())[isbn] ?? null
+  // Google Books data exists only for the books fetched so far, and only when its ISBN matched exactly.
+  const google = (await readGoogleStore())[isbn] ?? null
 
   const mergedTitle = mergeTitle({
     squareTitle: data.name ?? '',
@@ -127,13 +139,15 @@ export default defineEventHandler(async (event) => {
       categories: mergeCategories({
         squareCategories: categories as string[],
         isbndbSubjects: isbndb.status === 'found' ? isbndb.subjects : [],
-        listedCategories: listed?.category ?? []
+        googleCategories: google?.status === 'found' ? google.book?.categories ?? [] : null,
+        titleText: mergedTitle.base,
+        descriptionText: (isbndb.status === 'found' ? isbndb.description : null) ?? data.description_plaintext ?? data.description ?? ''
       })
     },
     // Weight (pounds) from the owner's own list; used when ISBNdb has none.
     listedWeight: listed?.weight ?? null,
     imageCandidates,
-    saved: (await readEdits())[item.id] ?? null,
+    saved: await savedEditFor(item.id),
     // The item exactly as Square returned it, plus the category and image objects it points to.
     // Square's copy of this item from just before each change this app made, newest first.
     backups: await listBackups(item.id),

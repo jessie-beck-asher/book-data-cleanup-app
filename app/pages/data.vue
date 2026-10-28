@@ -71,6 +71,35 @@ async function startFetch() {
 onMounted(() => { if (isbndb.value?.job.running) watchJob() })
 onBeforeUnmount(() => clearInterval(poller))
 
+// Google Books fetch (categories to compare against ISBNdb's), same pattern as above.
+interface GoogleStatus {
+  startIsbn: string, inRange: number, alreadySaved: number, found: number, noMatch: number, withCategories: number
+  pending: number, wouldRequest: number, dailyLimit: number, keySet: boolean
+  job: { running: boolean, planned: number, fetched: number, noMatch: number, withCategories: number, requests: number, finishedAt: string | null, error: string | null }
+}
+const { data: google, refresh: refreshGoogle } = await useFetch<GoogleStatus>('/api/google-books/status')
+const googleError = ref('')
+let googlePoller: ReturnType<typeof setInterval> | undefined
+function watchGoogleJob() {
+  clearInterval(googlePoller)
+  googlePoller = setInterval(async () => {
+    await refreshGoogle()
+    if (!google.value?.job.running) clearInterval(googlePoller)
+  }, 2000)
+}
+async function startGoogleFetch() {
+  googleError.value = ''
+  try {
+    await $fetch('/api/google-books/fetch', { method: 'POST', body: { confirm: true } })
+    await refreshGoogle()
+    watchGoogleJob()
+  } catch (error: any) {
+    googleError.value = error?.data?.statusMessage ?? 'Could not start the fetch'
+  }
+}
+onMounted(() => { if (google.value?.job.running) watchGoogleJob() })
+onBeforeUnmount(() => clearInterval(googlePoller))
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString()
 }
@@ -134,6 +163,35 @@ function formatDate(iso: string) {
       </template>
       <p v-if="isbndb.job.error" class="error">The last run stopped: {{ isbndb.job.error }}. Everything fetched before that is saved; run it again to continue.</p>
       <p v-if="fetchError" class="error">{{ fetchError }}</p>
+    </section>
+
+    <section v-if="snapshot?.exists && google">
+      <h2>Google Books categories</h2>
+      <p>
+        From ISBN {{ google.startIsbn }} down the book list: {{ google.inRange }} books. Saved so far: {{ google.alreadySaved }}
+        ({{ google.found }} found, {{ google.withCategories }} with categories, {{ google.noMatch }} no match).
+        Each book is searched by title and author, and a result is saved only when its own ISBN matches. Answers are saved to data/google-books-data.json and are used to check the genre suggestions.
+      </p>
+      <p v-if="!google.keySet">No Google Books key is set (GOOGLE_BOOKS_API_KEY in .env). Without one, Google may stop the fetch early; it picks up where it left off.</p>
+      <template v-if="google.job.running">
+        <p>
+          Fetching: {{ google.job.fetched }} of {{ google.job.planned }} books
+          ({{ google.job.withCategories }} with categories, {{ google.job.noMatch }} no match, {{ google.job.requests }} requests used). Keep this app running until it finishes. It is safe to stop; the next run continues where this one left off.
+        </p>
+      </template>
+      <template v-else>
+        <p v-if="google.pending">
+          {{ google.pending }} books still need their Google Books data. Each takes one or two requests, and a run stops at Google's usual
+          limit of {{ google.dailyLimit }} requests a day, then continues the next day.
+        </p>
+        <p v-else>Every book in range already has its Google Books data saved. Nothing to fetch.</p>
+        <button v-if="google.pending" @click="startGoogleFetch">Fetch {{ google.wouldRequest }} books from Google Books</button>
+        <p v-if="google.job.finishedAt && !google.job.error">
+          Last run finished: {{ google.job.fetched }} books, {{ google.job.withCategories }} with categories, {{ google.job.noMatch }} with no match.
+        </p>
+      </template>
+      <p v-if="google.job.error" class="error">The last run stopped: {{ google.job.error }}. Everything fetched before that is saved; run it again to continue.</p>
+      <p v-if="googleError" class="error">{{ googleError }}</p>
     </section>
 
     <section v-if="snapshot?.exists">

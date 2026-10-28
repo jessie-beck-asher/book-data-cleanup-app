@@ -80,6 +80,7 @@ export default defineEventHandler(async (event) => {
     // 4. Refresh the local snapshot from Square and record that this book was updated.
     await refreshSnapshotItem(id, deletable)
     await markUpdated(id)
+    await syncSavedImages(id)
     return { updated: true, steps: done, problems: deleteProblems }
   } catch (error: any) {
     // Say how far it got, so a half-finished update is never a mystery.

@@ -53,9 +53,31 @@ export function breakLongParagraph(paragraph: string): string {
   return parts.join('\n\n')
 }
 
+// A short line with no sentence ending ("Plus size FMC", "Tropes:") is a list item. Two or more in a row stay on consecutive lines.
+const isListLine = (line: string) => line.length <= 60 && !/[.!?…]["”’)]*$/.test(line)
+
+// Lines separated by a single break: runs of list items keep single breaks, everything else becomes its own spaced paragraph.
+function spaceLines(block: string): { text: string, endsWithList: boolean } {
+  const parts: string[] = []
+  let run: string[] = []
+  const flush = () => { if (run.length) parts.push(run.join('\n')); run = [] }
+  for (const line of block.split('\n')) {
+    if (isListLine(line)) { run.push(line); continue }
+    flush()
+    parts.push(line)
+  }
+  const endsWithList = run.length > 1
+  flush()
+  return { text: parts.join('\n\n'), endsWithList }
+}
+
+// Leftover from the cover text: `"-Page 4 of cover.`
+const TRAILING_COVER_NOTE = /\s*["“”]*\s*[-–—]*\s*page\s+\d+\s+of\s+(?:the\s+)?cover\.?["“”]*\s*$/i
+const TRAILING_BRACKETS = /\s*\[[^\[\]]*\]\.?\s*$/
+
 // For descriptions going to Square: drops "- Provided by publisher." wherever it appears (ISBNdb usually has it right after
 // the closing quote, like `...ablaze?"-- Provided by publisher.`), drops quote marks (and a trailing "--") at the very
-// start and end, adds a space after a period that is jammed against the next sentence, puts a blank line between lines, turns "--" and em dashes into "-", turns ". . ." into "...", ends the text with a period if it has no closing punctuation, and breaks up
+// start and end, adds a space after a period that is jammed against the next sentence, puts a blank line between paragraph lines (but not between the short lines of a list), turns "--" and em dashes into "-", turns ". . ." into "...", ends the text with a period if it has no closing punctuation, and breaks up
 // huge paragraphs.
 export function cleanDescription(text: string): string {
   let cleaned = tidyText(text.replace(/[ \t]*[-–—]*[ \t]*provided\s+by\s+(?:the\s+)?publisher\.?[ \t]*/gi, ''))
@@ -72,8 +94,14 @@ export function cleanDescription(text: string): string {
     .replace(/—/g, '-')
     .trim()
   if (!cleaned) return cleaned
-  // A single line break between lines becomes a blank line, so every line is its own spaced paragraph.
-  cleaned = cleaned.replace(/(?<!\n)\n(?!\n)/g, '\n\n')
-  const ended = /[.!?…]["”’)]*$/.test(cleaned) ? cleaned : `${cleaned}.`
+  // A single line break between lines becomes a blank line so each is its own spaced paragraph, except short list lines (see spaceLines).
+  // Bracketed text ("[ text ]", "[text].") and a "-Page 4 of cover." note at the very end of a paragraph are dropped.
+  cleaned = cleaned.split('\n').map(line => line.replace(TRAILING_COVER_NOTE, '').replace(TRAILING_BRACKETS, '')).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  if (!cleaned) return cleaned
+  const blocks = cleaned.split(/\n{2,}/).map(spaceLines)
+  const listEnd = blocks[blocks.length - 1]!.endsWithList
+  cleaned = blocks.map(block => block.text).join('\n\n')
+  // A list at the very end is left as it is, without a period added after the last item.
+  const ended = listEnd || /[.!?…]["”’)]*$/.test(cleaned) ? cleaned : `${cleaned}.`
   return ended.split(/\n{2,}/).map(breakLongParagraph).join('\n\n')
 }

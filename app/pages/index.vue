@@ -42,6 +42,19 @@ function goToResume() {
 function goToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
+// Mark a book to talk to the book owner about. It turns orange; click again to clear it. Saved on this computer only.
+// The fetched list is not deeply reactive, so a click is tracked here and wins over the loaded value.
+const flagChanges = ref<Record<string, boolean>>({})
+const isFlagged = (book: { id: string, flagged: boolean }) => flagChanges.value[book.id] ?? book.flagged
+async function toggleFlag(book: { id: string, flagged: boolean }) {
+  const was = isFlagged(book)
+  flagChanges.value = { ...flagChanges.value, [book.id]: !was }
+  try {
+    await $fetch(`/api/flags/${book.id}`, { method: 'PUT', body: { flagged: !was } })
+  } catch {
+    flagChanges.value = { ...flagChanges.value, [book.id]: was }
+  }
+}
 const toast = ref<{ message: string, problems: string[] } | null>(null)
 onMounted(() => {
   // Coming back to the dashboard from inside the app reuses the earlier list; read it again so "Where I left off" and the Yes/No column are current.
@@ -75,10 +88,10 @@ onMounted(() => {
       <p>{{ data.books.length }} books</p>
       <table class="book-table">
         <thead>
-          <tr><th>#</th><th>Title</th><th>Updated in Square</th><th>Shipping weight (lb)</th></tr>
+          <tr><th>#</th><th>Title</th><th>Updated in Square</th><th>Talk to owner</th><th>Shipping weight (lb)</th></tr>
         </thead>
         <tbody>
-          <tr v-for="(book, index) in data.books" :id="`book-row-${index}`" :key="book.id" :class="{ flash: flashRow === index }">
+          <tr v-for="(book, index) in data.books" :id="`book-row-${index}`" :key="book.id" :class="{ flash: flashRow === index, flagged: isFlagged(book) }">
             <td class="row-number">{{ index + 1 }} / {{ data.books.length }}</td>
             <td>
               <div class="title-cell">
@@ -91,6 +104,11 @@ onMounted(() => {
               </div>
             </td>
             <td>{{ book.wasUpdated ? 'Yes' : 'No' }}</td>
+            <td>
+              <button type="button" :class="['flag', { on: isFlagged(book) }]" :aria-pressed="isFlagged(book)" @click="toggleFlag(book)">
+                {{ isFlagged(book) ? 'Needs owner' : 'Flag' }}
+              </button>
+            </td>
             <td>
               <div v-if="book.weight !== null" class="title-cell">
                 <span>{{ book.weight }}</span>
@@ -118,6 +136,9 @@ onMounted(() => {
 .title-cell { display: flex; align-items: center; gap: 0.5rem; }
 .title-cell .tag, .title-cell .isbn, .title-cell .copy { flex: none; margin: 0; }
 .isbn { color: #555; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }
+.flag { font-size: 0.8rem; padding: 0.15rem 0.6rem; margin: 0; border: 1px solid #999; border-radius: 999px; background: #fff; color: #333; cursor: pointer; }
+.flag.on { background: #f08a00; border-color: #f08a00; color: #fff; font-weight: 700; }
+tr.flagged td, tr.flagged th { background: #ffe6bf; }
 .copy { font-size: 0.8rem; padding: 0.1rem 0.5rem; }
 .toast { position: fixed; left: 1.25rem; bottom: 1.25rem; max-width: 26rem; padding: 0.85rem 1.1rem; background: #1f7a4a; color: #fff; border-radius: 0.5rem; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); cursor: pointer; z-index: 50; }
 .jump { position: fixed; right: 1rem; z-index: 40; display: flex; gap: 0.5rem; }

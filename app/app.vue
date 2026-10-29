@@ -11,6 +11,8 @@ const environment = computed(() => data.value?.squareEnvironment ?? 'unknown')
     </header>
     <nav>
       <NuxtLink to="/">Books</NuxtLink>
+      <NuxtLink to="/bookish">Bookish Items</NuxtLink>
+      <NuxtLink to="/categories">Categories</NuxtLink>
       <NuxtLink to="/data">Data tools</NuxtLink>
     </nav>
     <main>

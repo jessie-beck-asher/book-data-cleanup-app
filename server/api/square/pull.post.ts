@@ -35,6 +35,18 @@ export default defineEventHandler(async (event) => {
       cursor = result.json?.cursor
     } while (cursor)
 
+    // Categories no item uses yet (like a brand new one) are not in the items' related objects, so they are read on their own.
+    cursor = undefined
+    do {
+      const result = await squareReadSearch('/v2/catalog/search', {
+        object_types: ['CATEGORY'],
+        limit: 100,
+        ...(cursor ? { cursor } : {})
+      })
+      for (const object of result.json?.objects ?? []) relatedObjects.set(object.id, object)
+      cursor = result.json?.cursor
+    } while (cursor)
+
     const snapshot: SquareSnapshot = {
       environment: environment!,
       pulledAt: new Date().toISOString(),
